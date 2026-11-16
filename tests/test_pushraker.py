@@ -1291,6 +1291,31 @@ async def test_file_mode():
         check("POST config: a bad setting is a 400 with the reason",
               e.status_code == 400 and "Server must look like" in str(e),
               str(e))
+    # A save that fails: "Nothing was saved." unless the old secrets
+    # couldn't be put back
+    real_save = c.store.save
+    msgs = []
+    for err in (OSError("disk full"),
+                pn.cfgmod.SecretsNotRestored("Settings save failed and the "
+                                             "previous secrets could not be "
+                                             "restored: disk full")):
+        def failing(_s, err=err):
+            raise err
+        c.store.save = failing
+        try:
+            await server.endpoints["/server/pushraker/config"](
+                WebRequest("POST", dict(enabled=True, provider="ntfy",
+                                        server="https://ntfy.example.com",
+                                        topic="u1")))
+            msgs.append(None)
+        except Server.error as e:
+            msgs.append(str(e))
+    c.store.save = real_save
+    check("a failed save says Nothing was saved, except when the old "
+          "secrets couldn't be restored",
+          msgs[0] and "disk full. Nothing was saved." in msgs[0]
+          and msgs[1] and "could not be restored" in msgs[1]
+          and "Nothing was saved" not in msgs[1], msgs)
     GCODE.clear()
     view = await server.endpoints["/server/pushraker/config"](
         WebRequest("POST", dict(enabled=True, provider="ntfy",

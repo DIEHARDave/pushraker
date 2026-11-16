@@ -277,6 +277,11 @@ LEGACY_CAMERAS = {"internal": "case", "usb": "usb"}
 SETTINGS_FORMAT = 1
 
 
+class SecretsNotRestored(OSError):
+    """Saving failed after the secrets were written, and the previous
+    secrets couldn't be put back: something was changed."""
+
+
 class ConfigError(Exception):
     """A setting that can't be used; `field`: which (its pushraker.conf
     name), when it's one."""
@@ -796,8 +801,9 @@ class Store:
             try:
                 self._write(self.secrets_path, old_secrets, 0o600)
             except OSError as restore_error:
-                raise OSError("Settings save failed and the previous secrets "
-                              f"could not be restored: {restore_error}") from save_error
+                raise SecretsNotRestored(
+                    "Settings save failed and the previous secrets "
+                    f"could not be restored: {restore_error}") from save_error
             raise
         self._stamp = self.stamp()
 

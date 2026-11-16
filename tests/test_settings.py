@@ -288,6 +288,24 @@ def run_settings_tests():
     check("failed settings write restores the previous credentials",
           failed and open(store.settings_path).read() == old_cfg
           and open(store.secrets_path).read() == old_sec)
+
+    # ...and when the old secrets can't be put back either: its own error
+    def fail_both(path, text, mode):
+        if path == store.settings_path or text == old_sec:
+            raise OSError("simulated write failure")
+        return original_write(path, text, mode)
+    st.Store._write = staticmethod(fail_both)
+    try:
+        store.save(dict(tok, secret="tk_replacement"))
+        raised = None
+    except OSError as e:
+        raised = e
+    finally:
+        st.Store._write = staticmethod(original_write)
+        original_write(store.secrets_path, old_sec, 0o600)
+    check("...not restored: SecretsNotRestored, which says so",
+          isinstance(raised, st.SecretsNotRestored)
+          and "could not be restored" in str(raised), raised)
     with open(store.settings_path, "a") as f:
         f.write("name: Edited\n")
     os.utime(store.settings_path, None)

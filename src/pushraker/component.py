@@ -1386,8 +1386,12 @@ class PushNotifications:
                         "check them (server, user name, addresses)")
         try:
             self.store.save(s)
-        except OSError as e:
+        except cfgmod.SecretsNotRestored as e:
             raise cfgmod.ConfigError(f"Could not write the settings: {e}.")
+        except OSError as e:
+            # Either file failing leaves both as they were
+            raise cfgmod.ConfigError(f"Could not write the settings: {e}. "
+                                     "Nothing was saved.")
         self.settings = s
         self._apply_options(opts)
         await self._push_hooks()
