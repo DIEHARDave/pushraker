@@ -434,17 +434,31 @@ against its checksum, updated with pushraker, and removable from
 toolhead order, as lists: `extruders.names`, `.count`, Klipper's
 `.temperatures` `.targets` `.powers` `.nozzle_diameters`, and the
 filament loaded: `.filaments` (names) `.materials` `.vendors` `.colors`
-`.grams_left` `.slots`. A toolhead with nothing loaded is left out of
-the filament lists.
+`.grams_left` `.grams_full` `.percent_left` `.slots`. A toolhead with
+nothing loaded is left out of the filament lists.
 
-One toolhead: Klipper's fields are under `printer` (`printer.extruder1.temperature`);
-what pushraker adds is under `extruders`:
+One toolhead: Klipper's fields are under `printer`
+(`printer.extruder1.temperature`) and also under `extruders`
+(`extruders.extruder1.temperature`); what pushraker adds is under
+`extruders`:
 
 | Name | Value |
 |---|---|
 | `extruders.extruder1.filament.name` `.material` `.vendor` `.color` | the filament loaded in that toolhead |
 | `extruders.extruder1.filament.grams_left` | filament left on its spool (Spoolman) |
+| `extruders.extruder1.filament.grams_full` | the spool's full weight: `1000` for a 1 kg spool, `2000` for 2 kg (Spoolman) |
+| `extruders.extruder1.filament.percent_left` | 0 to 100: what's left of the spool; none when its full weight isn't known |
 | `extruders.extruder1.slot` | multiACE: the slot feeding it ("ACE 1 slot 3") |
+
+`extruders.current` is the toolhead in use, with all the same values:
+when the printer is on extruder1, `extruders.current.filament.material`
+is `extruders.extruder1.filament.material`. `{{ extruders.current }}`
+prints its Klipper name; `|toolhead` makes it "Toolhead 2". In a custom
+notification's When:
+
+```jinja
+extruders.current.filament.percent_left < 10
+```
 
 On the Snapmaker U1 the printer knows the loaded filament from its RFID
 tag or the screen. `{% for e in extruders %}` goes through the toolheads

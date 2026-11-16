@@ -3124,6 +3124,49 @@ async def test_render_thread():
           pn.jj.render(raw, {}))
 
 
+async def test_current_extruder():
+    """extruders.current: the toolhead in use, with all its values;
+    grams_full and percent_left from Spoolman."""
+    print("extruders.current, grams_full, percent_left")
+    reset_world()
+    server, c = make({"spoolman_url": "http://spoolman:7912"},
+                     {"paused": [("ntfy", FakeService([], "ntfy"), False)]})
+    SPOOLS[20] = {"id": 20, "remaining_weight": 640., "initial_weight": 2000,
+                  "filament": {"name": "PETG HF", "material": "PETG",
+                               "vendor": {"name": "X"}, "weight": 2000}}
+    ptc = {"filament_spool_id": [0, 20, 0, 0],
+           "filament_type": ["PLA", "PETG", "PLA", "PLA"],
+           "filament_exist": [True, True, True, True]}
+    STATE["print_task_config"] = ptc
+    c._status["print_task_config"] = dict(ptc)
+    STATE["toolhead"] = {"extruder": "extruder1"}
+    STATE["extruder1"] = {"temperature": 215.0, "target": 215.0}
+    await server.handlers["server:klippy_ready"]()
+    c._status["print_task_config"] = dict(ptc)
+    tpl = ("{{ extruders.current }}|{{ extruders.current.temperature|int }}|"
+           "{{ extruders.current.filament.material }}|"
+           "{{ extruders.current.filament.material == "
+           "extruders.extruder1.filament.material }}|"
+           "{{ extruders.current.filament.grams_left|int }}|"
+           "{{ extruders.current.filament.grams_full|int }}|"
+           "{{ extruders.current.filament.percent_left }}|"
+           "{% if extruders.current.filament.percent_left < 50 %}low"
+           "{% endif %}")
+    out = await c._render_template(tpl)
+    check("current: the toolhead in use, its Klipper values and filament; "
+          "grams_full and percent_left",
+          out == "extruder1|215|PETG|yes|640|2000|32|low", out)
+    STATE["toolhead"] = {"extruder": "extruder"}
+    out = await c._render_template("{{ extruders.current }}|"
+                                   "{{ extruders.current.filament.material }}")
+    named = await c._render_template("{{ extruders.current|toolhead }}")
+    check("...it follows a tool change; |toolhead names it",
+          out == "extruder|PLA" and named == "Toolhead 1", (out, named))
+    out = await c._render_template("{{ extruders.percent_left }}")
+    check("extruders.percent_left: every toolhead (none without a spool)",
+          "32" in out, out)
+
+
 async def test_now_values():
     """now.*: the time of sending, in the notification's time zone."""
     print("now.*")
@@ -3569,8 +3612,8 @@ async def test_data():
           "heater_bed" in names(cats["thermals"]["children"])
           and "temperature_sensor cavity" in names(cats["thermals"]["children"])
           and "extruder" not in names(cats["thermals"]["children"])
-          and names(cats["toolheads"]["children"])[:3] == [
-              "extruders", "extruder", "extruder1"]
+          and names(cats["toolheads"]["children"])[:4] == [
+              "extruders", "current", "extruder", "extruder1"]
           and "print_task_config" not in str(cat), cats.keys())
     every = cats["toolheads"]["children"][0]
     check("extruders (every toolhead) first under Toolheads: names, count, "
@@ -3584,7 +3627,21 @@ async def test_data():
           and every["children"][0]["formats"][1]["label"].startswith(
               "Toolhead 1, Toolhead 2"),
           every)
-    ext1 = cats["toolheads"]["children"][2]
+    cur = cats["toolheads"]["children"][1]
+    exprs = []
+
+    def walk(n):
+        if n.get("expr"):
+            exprs.append(n["expr"])
+        for k in n.get("children") or []:
+            walk(k)
+    walk(cur)
+    check("current: the toolhead in use, every value through "
+          "extruders.current",
+          exprs and all(e.startswith("extruders.current.") for e in exprs)
+          and "extruders.current.temperature" in exprs
+          and "extruders.current.filament.material" in exprs, exprs)
+    ext1 = cats["toolheads"]["children"][3]
     check("an extruder: Klipper's fields, then the filament loaded",
           names(ext1["children"])[-1] == "filament"
           and {"temperature", "target", "power"} <= set(names(ext1["children"]))
@@ -3689,7 +3746,7 @@ async def run_component_tests():
     for t in (test_order_and_priority, test_expiry_and_independence,
               test_fault_dedup, test_same_preparation_everywhere,
               test_email_threads, test_filament_measured, test_filament_alerts,
-              test_faults_over_a_job, test_spool_switch, test_ace, test_file_pauses, test_file_mode, test_generic_printer, test_status_report, test_time_left, test_calibration, test_gotify, test_image_names, test_fault_emoji, test_send_gap, test_macro_notify, test_render_thread, test_job_moments, test_macro_topic, test_template_limits, test_now_values, test_queue_line, test_chamber, test_filament_change, test_backup_order, test_console,
+              test_faults_over_a_job, test_spool_switch, test_ace, test_file_pauses, test_file_mode, test_generic_printer, test_status_report, test_time_left, test_calibration, test_gotify, test_image_names, test_fault_emoji, test_send_gap, test_macro_notify, test_render_thread, test_job_moments, test_current_extruder, test_macro_topic, test_template_limits, test_now_values, test_queue_line, test_chamber, test_filament_change, test_backup_order, test_console,
               test_driver_hot,
               test_print_by_object,
               test_no_secrets_in_logs, test_config_lines, test_old_names, test_preprint,

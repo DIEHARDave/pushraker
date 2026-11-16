@@ -172,6 +172,8 @@ EXTRUDERS_ADDED = {"filaments": ("filament", "name"),
                    "vendors": ("filament", "vendor"),
                    "colors": ("filament", "color"),
                    "grams_left": ("filament", "grams_left"),
+                   "grams_full": ("filament", "grams_full"),
+                   "percent_left": ("filament", "percent_left"),
                    "slots": ("slot",)}
 TITLES = {
     "started": "▶️ {name} started",
@@ -1559,6 +1561,7 @@ class PushNotifications:
         tokens: List[tp.Token] = []
         need: Dict[str, Any] = {}
         all_exts = False
+        current: Optional[str] = None
         for text in texts:
             for obj, fields in jj.printer_needs(text).items():
                 if obj == "*":
@@ -1572,13 +1575,26 @@ class PushNotifications:
                 if root == "job" and path:
                     tokens.append(tp.Token("", tp.JOB, list(path), ""))
                 elif root == "extruders":
+                    path = list(path)
+                    # extruders.current: the toolhead in use, as itself
+                    if path and path[0] == "current":
+                        if current is None:
+                            current = await self._current_extruder()
+                        path[0] = current
                     if not path:
                         all_exts = True
                     elif RX_EXTRUDER.fullmatch(path[0]):
                         if len(path) > 1:
                             tokens.append(tp.Token("", path[0], path[1:], ""))
+                            # Klipper's own fields of it (temperature…)
+                            if path[1] not in EXTRUDER_ADDED:
+                                cur = need.setdefault(path[0], [])
+                                if cur is not None and path[1] not in cur:
+                                    cur.append(path[1])
                         else:
-                            all_exts = True
+                            need[path[0]] = None
+                            tokens.append(tp.Token("", path[0],
+                                                   ["filament", "name"], ""))
                     else:
                         tokens.append(tp.Token("", tp.EXTRUDERS, path, ""))
         exts = list(self.printer.extruders)
@@ -1609,7 +1625,8 @@ class PushNotifications:
         ev["time"] = self._time_view(at)
         return {"printer": state,
                 "job": self._job_view(resolve, sample),
-                "extruders": self._extruders_view(resolve, state, sample),
+                "extruders": self._extruders_view(resolve, state, sample,
+                                                  current),
                 "event": ev,
                 "machine": self._machine()}
 
@@ -1683,13 +1700,36 @@ class PushNotifications:
                 return ["queue", m.group(1)] + path[2:]
         return list(path)
 
+    async def _current_extruder(self) -> str:
+        """The toolhead in use (Klipper's toolhead.extruder)."""
+        try:
+            got = await asyncio.wait_for(
+                self._query({"toolhead": ["extruder"]}), DATA_QUERY_TIMEOUT)
+            name = (got.get("toolhead") or {}).get("extruder")
+        except Exception:
+            name = None
+        return name if name and RX_EXTRUDER.fullmatch(str(name)) \
+            else "extruder"
+
     def _extruders_view(self, resolve: Any, state: Dict[str, Any],
-                        sample: bool) -> jj.View:
+                        sample: bool, current: Optional[str] = None
+                        ) -> jj.View:
         exts = list(self.printer.extruders)
 
+        def here(path: List[str]) -> List[str]:
+            """extruders.current.* as the toolhead it is."""
+            if path and path[0] == "current":
+                return [current or "extruder"] + list(path[1:])
+            return path
+
         def look(path: List[str]) -> Any:
+            path = here(path)
             if not path:
                 return None
+            if len(path) > 1 and RX_EXTRUDER.fullmatch(path[0]) and \
+                    path[1] not in EXTRUDER_ADDED:
+                return (state.get(path[0]) or {}).get(path[1]) \
+                    if len(path) == 2 else None
             if RX_EXTRUDER.fullmatch(path[0]):
                 return resolve(tp.Token("", path[0], path[1:], "")) \
                     if len(path) > 1 else self._ext_name(
@@ -1697,6 +1737,7 @@ class PushNotifications:
             return resolve(tp.Token("", tp.EXTRUDERS, path, ""))
 
         def branch(path: List[str]) -> bool:
+            path = here(path)
             return bool(path) and RX_EXTRUDER.fullmatch(path[0]) is not None \
                 and (len(path) == 1 or path[1:] == ["filament"])
 
@@ -1923,16 +1964,29 @@ class PushNotifications:
         if spool:
             fil["name"] = self._spool_name(spool) or fil.get("name")
             fil["grams_left"] = self._remaining(spool)
+            fil["grams_full"] = self._full_weight(spool)
+            fil["percent_left"] = self._percent(fil["grams_left"],
+                                                fil["grams_full"])
         out = {"filament": fil or None, "slot": vals.get("slot")}
         if sample and not fil:
             name, mat, vendor, colour, _, _ = \
                 SAMPLE_FILAMENTS[ch % len(SAMPLE_FILAMENTS)]
             out["filament"] = {"name": name, "material": mat,
                                "vendor": vendor, "color": colour,
-                               "grams_left": 640.}
+                               "grams_left": 640., "grams_full": 1000.,
+                               "percent_left": 64.}
         if sample and out["slot"] is None and self._ace_on:
             out["slot"] = f"ACE 1 slot {ch + 1}"
         return out
+
+    @staticmethod
+    def _percent(left: Optional[float], full: Optional[float]
+                 ) -> Optional[float]:
+        """What's left of the spool, 0 to 100 (one decimal); None when its
+        full weight isn't known."""
+        if left is None or not full:
+            return None
+        return round(max(0., min(100., 100. * left / full)), 1)
 
     def _printer_context(self) -> Dict[str, Any]:
         """What the harness sees when it adds its values."""
@@ -2411,6 +2465,7 @@ class PushNotifications:
             placed.add(obj)
         if heads:
             heads.insert(0, self._extruders_node(exts, state, heads))
+            heads.insert(1, self._current_node(exts, state, heads[1:]))
         # Fans
         fans = []
         for obj in objs:
@@ -2506,6 +2561,30 @@ class PushNotifications:
             else:
                 out.append(base + k)
         return out
+
+    def _current_node(self, exts: Sequence[str], state: Dict[str, Any],
+                      heads: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """extruders.current: the toolhead in use, with all its values (a
+        copy of its entries, named through current)."""
+        active = str((state.get("toolhead") or {}).get("extruder") or "")
+        i = exts.index(active) if active in exts else 0
+        src = heads[i]
+
+        def rename(n: Dict[str, Any]) -> Dict[str, Any]:
+            out = dict(n)
+            if out.get("expr"):
+                out["expr"] = re.sub(
+                    rf"^(?:extruders\.{exts[i]}|printer\.{exts[i]})"
+                    r"(?=\.|$)", "extruders.current", out["expr"])
+            if out.get("children"):
+                out["children"] = [rename(c) for c in out["children"]]
+            return out
+        return tp.node("current", hint=f"in use now: toolhead {i + 1}",
+                       info="The toolhead in use, with all its values: "
+                       "extruders.current.filament.material is the "
+                       "material in whichever toolhead is printing.",
+                       children=[rename(c) for c in
+                                 src.get("children") or []])
 
     def _extruders_node(self, exts: Sequence[str], state: Dict[str, Any],
                         heads: List[Dict[str, Any]]) -> Dict[str, Any]:
