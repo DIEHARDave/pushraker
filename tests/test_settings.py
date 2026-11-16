@@ -163,8 +163,13 @@ def run_settings_tests():
           .startswith("none, "))
     check("an unknown camera name is the same as none",
           "snapshot_url" not in st.render_options(dict(s, camera="nope"), ENV))
-    check("the old camera names map to Moonraker's",
-          st.validate(dict(camera="internal"), fresh(), ENV)["camera"] == "case")
+    check("a webcam named internal stays internal (only the old form's "
+          "settings are converted)",
+          st.validate(dict(camera="internal"), fresh(), ENV)["camera"]
+          == "internal")
+    check("...and read from pushraker.conf, it stays internal",
+          st.parse_section({"camera": "internal"}, fresh())["camera"]
+          == "internal")
     hv = st.hook_values(s, ENV)
     check("print hooks: lift and report for complete and cancel, the error "
           "row for a fault cancel", hv == {"complete": 2, "cancelled": 2,

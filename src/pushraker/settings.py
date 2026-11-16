@@ -270,8 +270,9 @@ EMAIL_PRESETS = {
     "brevo": {"label": "Brevo", "host": "smtp-relay.brevo.com", "port": 587,
               "security": "starttls"},
 }
-# Older settings (the Snapmaker U1 extended firmware's form) named the
-# cameras by their place; Moonraker's webcams are named by the user
+# The Snapmaker U1 extended firmware's old form named the cameras by their
+# place; Moonraker's webcams are named by the user. Only its settings are
+# converted: in pushraker's own a webcam may well be called "internal"
 LEGACY_CAMERAS = {"internal": "case", "usb": "usb"}
 SETTINGS_FORMAT = 1
 
@@ -688,7 +689,6 @@ def parse_section(sec: Any, s: Dict[str, Any]) -> Dict[str, Any]:
         s["rows"]["progress"].update(
             enabled=first["enabled"], priority=first["priority"],
             email=first["email"])
-    s["camera"] = LEGACY_CAMERAS.get(s["camera"], s["camera"])
     return s
 
 
@@ -845,6 +845,7 @@ def import_ini(settings_file: str, section: str,
     if not cfg.has_section(section):
         return s
     parse_section(cfg[section], s)
+    s["camera"] = LEGACY_CAMERAS.get(s["camera"], s["camera"])
     if secrets_file:
         stored = _read_ini_or_json_section(secrets_file, secrets_section)
         for key in SECRET_FIELDS + ("secret_for", "email_password_for"):
@@ -981,7 +982,6 @@ def validate(data: Dict[str, Any], current: Dict[str, Any],
         raise ConfigError("Invalid notification service")
     if s["auth"] not in AUTH_MODES:
         raise ConfigError("Invalid authentication mode")
-    s["camera"] = LEGACY_CAMERAS.get(s["camera"], s["camera"])
     if not RX_CAMERA.fullmatch(s["camera"]):
         raise ConfigError("Invalid camera")
     if s["layers_complete"] not in (1, 2, 3):
