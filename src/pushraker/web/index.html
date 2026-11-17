@@ -669,7 +669,6 @@
                     <div class="pr-lbl pr-whenlbl">When (evaluate&nbsp;<select id="pr-check"><option value="poll">every 5 seconds</option><option value="layer">on each layer change</option><option value="tool">on each tool change</option><option value="object">on each object change</option><option value="excluded">when an object is excluded</option><option value="progress">on each 1% of progress</option><option value="console">on each console message</option></select>) <button type="button" class="nt-i pr-info" id="pr-when-i" data-info="A condition, evaluated every 5 seconds: sent when it turns true. Empty: sent only from G-code." data-guide="custom-notifications" aria-label="About">?</button></div>
                     <textarea class="nt-input" id="pr-when" rows="2" spellcheck="false" autocomplete="off"></textarea>
                     <div id="pr-cm-when"></div>
-                    <div class="pr-now" id="pr-evvals" style="display:none"></div>
                     <div class="pr-now" id="pr-now"></div>
                     <div class="pr-repeat"><span>Send</span><select id="pr-repeat"><option value="change">each time it turns true (at most 1/min)</option><option value="job">once per print job</option><option value="job_pause">once per print job, resets after a pause</option><option value="minutes">at most every # minutes</option></select><span id="pr-rmin-wrap"># = <input type="number" id="pr-rmin" min="1" max="1440" inputmode="numeric"></span></div>
                 </div>
@@ -1223,25 +1222,17 @@
     const CHECKS = {
         poll: { info: 'A condition, evaluated every 5 seconds: sent when it turns true. Empty: sent only from G-code.',
                 send: 'each time it turns true (at most 1/min)', ph: PH_WHEN },
-        layer: { info: 'Evaluated at each layer change while printing: sent when true. Empty: every layer.',
-                 vals: '<code>event.layer</code> the new layer, <code>event.previous_layer</code>', ph: 'job.layer % 5 == 0' },
-        tool: { info: 'Evaluated at each tool change while printing (not before the first layer): sent when true. Empty: every tool change.',
-                vals: '<code>event.toolhead</code> the new one, <code>event.previous_toolhead</code>, and <code>extruders.current</code>', ph: 'extruders.current.filament.material == "TPU"' },
-        object: { info: 'Evaluated each time the printer moves to the next object (printing by object, or Exclude objects): sent when true. Empty: every object.',
-                  vals: '<code>event.object</code> the new one, <code>event.previous_object</code>', ph: 'event.object == job.objects.names[-1]' },
-        excluded: { info: 'Evaluated when an object is excluded, from the screen, Mainsail, Fluidd or G-code: sent when true. Empty: every excluded object.',
-                    vals: '<code>event.object</code> the excluded one, <code>job.objects</code> what\'s left', ph: '' },
-        progress: { info: 'Evaluated at each 1% of progress while printing: sent when true. Empty: every 1%.',
-                    vals: '<code>event.progress</code> 0 to 100', ph: 'event.progress % 10 == 0' },
-        console: { info: 'Evaluated at each line Klipper writes to the console: sent when true. Empty: every line.',
-                   vals: '<code>event.message</code> the line', ph: '"Probe" in event.message' }
+        layer: { info: 'Evaluated at each layer change while printing: sent when true. Empty: every layer.', ph: 'job.layer % 5 == 0' },
+        tool: { info: 'Evaluated at each tool change while printing (not before the first layer): sent when true. Empty: every tool change.', ph: 'extruders.current.filament.material == "TPU"' },
+        object: { info: 'Evaluated each time the printer moves to the next object (printing by object, or Exclude objects): sent when true. Empty: every object.', ph: 'event.object == job.objects.names[-1]' },
+        excluded: { info: 'Evaluated when an object is excluded, from the screen, Mainsail, Fluidd or G-code: sent when true. Empty: every excluded object.', ph: '"Benchy" in event.object' },
+        progress: { info: 'Evaluated at each 1% of progress while printing: sent when true. Empty: every 1%.', ph: 'event.progress % 10 == 0' },
+        console: { info: 'Evaluated at each line Klipper writes to the console: sent when true. Empty: every line.', ph: '"Probe" in event.message' }
     };
     function mockCheck() {
         const c = CHECKS[el('pr-check').value], poll = el('pr-check').value === 'poll';
         el('pr-when-i').dataset.info = c.info;
         el('pr-repeat').options[0].textContent = poll ? c.send : 'each time (at most 1/10 s)';
-        el('pr-evvals').innerHTML = poll ? '' : 'Values: ' + c.vals;
-        el('pr-evvals').style.display = poll ? 'none' : '';
         phSpan.when.textContent = c.ph;
         el('pr-when').placeholder = c.ph;
         if (whenView) whenView.dispatch({});
