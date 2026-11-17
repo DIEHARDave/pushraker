@@ -3044,6 +3044,134 @@ async def test_custom_notifications():
             check(f"refuses {what}", what in str(e), str(e))
 
 
+async def test_custom_events():
+    """Custom notifications evaluated at an event: layer change, tool
+    change, an excluded object, 1% of progress, a console line; sent each
+    time When is true then (empty: always), with the event's values, not
+    again within 10 seconds."""
+    print("Custom notifications at events")
+    reset_world()
+    log = []
+    ntfy = FakeService(log, "ntfy")
+    names = ("every5", "tpu", "gone", "tenth", "probe")
+    server, c = make({}, {f"custom_{n}": [("ntfy", ntfy, False)]
+                          for n in names})
+    STATE["toolhead"] = {"extruder": "extruder"}
+    STATE["exclude_object"] = {"objects": [], "excluded_objects": []}
+    cust = pn.cfgmod.clean_custom([
+        {"name": "every5", "evaluate": "layer", "when": "job.layer % 5 == 0",
+         "title": "L{{ event.layer }}", "contents": ""},
+        {"name": "tpu", "evaluate": "tool", "when": "",
+         "title": "{{ event.previous_toolhead }}>{{ event.toolhead }}",
+         "contents": ""},
+        {"name": "gone", "evaluate": "excluded", "when": "",
+         "title": "X {{ event.object.name }}", "contents": ""},
+        {"name": "tenth", "evaluate": "progress",
+         "when": "event.progress % 10 == 0",
+         "title": "P{{ event.progress }}", "contents": ""},
+        {"name": "probe", "evaluate": "console",
+         "when": "'Probe' in event.message",
+         "title": "{{ event.trigger }}: {{ event.message }}",
+         "contents": ""}])
+    check("evaluate is kept, poll by default",
+          [x["evaluate"] for x in cust]
+          == ["layer", "tool", "excluded", "progress", "console"]
+          and pn.cfgmod.clean_custom([{"name": "a"}])[0]["evaluate"]
+          == "poll", cust)
+    await start_job(server)
+    c.settings = dict(c.settings or pn.cfgmod.defaults("U1"), custom=cust)
+    await asyncio.sleep(0.3)
+    log.clear()
+
+    async def layer(n):
+        c._status["print_stats"]["info"] = {"current_layer": n}
+        await c._on_status_update(
+            {"print_stats": {"info": {"current_layer": n}}}, 0)
+        await asyncio.sleep(0.15)
+
+    for n in (4, 5, 6):
+        await layer(n)
+    check("at each layer change, when true: layer 5 only",
+          [e["title"] for e in log] == ["L5"], [e["title"] for e in log])
+    log.clear()
+    c._custom_sent["every5"] -= 20
+    for n in range(7, 11):
+        await layer(n)
+    check("...again on layer 10", [e["title"] for e in log] == ["L10"],
+          [e["title"] for e in log])
+    log.clear()
+    await layer(15)
+    check("...not within 10 seconds of the last", not log,
+          [e["title"] for e in log])
+    await c._on_status_update({"toolhead": {"extruder": "extruder2"}}, 0)
+    await asyncio.sleep(0.2)
+    check("at each tool change, empty When: always, with both toolheads",
+          [e["title"] for e in log] == ["extruder>extruder2"],
+          [e["title"] for e in log])
+    log.clear()
+    c._status["print_stats"]["state"] = "paused"
+    await c._on_status_update(
+        {"exclude_object": {"excluded_objects": ["BENCHY_ID_1"]}}, 0)
+    await asyncio.sleep(0.2)
+    check("an object excluded, even while paused",
+          [e["title"] for e in log] and
+          log[0]["title"].startswith("X "), [e["title"] for e in log])
+    log.clear()
+    await c._on_status_update({"toolhead": {"extruder": "extruder"}}, 0)
+    c._status["print_stats"]["state"] = "printing"
+    await asyncio.sleep(0.2)
+    check("...a tool change while paused isn't evaluated", not log,
+          [e["title"] for e in log])
+    c._status["virtual_sdcard"]["file_position"] = 1000 + 1000
+    await c._on_status_update({"virtual_sdcard": {"file_position": 2000}},
+                              0)
+    c._status["virtual_sdcard"]["file_position"] = 1000 + 1100
+    await c._on_status_update({"virtual_sdcard": {"file_position": 2100}},
+                              0)
+    await asyncio.sleep(0.2)
+    check("at each 1% of progress, when true: 10% only",
+          [e["title"] for e in log] == ["P10"], [e["title"] for e in log])
+    log.clear()
+    c._on_gcode_response("// Probe triggered at z=0.012")
+    c._on_gcode_response("echo: hello")
+    await asyncio.sleep(0.2)
+    check("at each console line, when true",
+          [e["title"] for e in log]
+          == ["console: // Probe triggered at z=0.012"],
+          [e["title"] for e in log])
+    log.clear()
+    cust.append(pn.cfgmod.clean_custom([
+        {"name": "last", "evaluate": "object",
+         "when": "event.object.number == event.object.count",
+         "title": "{{ event.previous_object.name }}>{{ event.object.name }}",
+         "contents": ""}])[0])
+    c.rows["custom_last"] = c.rows["custom_probe"]
+    c._by_object = True
+    c._status["exclude_object"].update(
+        objects=[{"name": "CUBE"}, {"name": "BENCHY"}], excluded_objects=[])
+    for obj in ("CUBE", "BENCHY", "CUBE"):
+        c._status["exclude_object"]["current_object"] = obj
+        c._track_objects("Benchy.gcode")
+    await asyncio.sleep(0.2)
+    check("at each object (by object), when true: the last one, once",
+          [e["title"] for e in log] == ["CUBE>BENCHY"],
+          [e["title"] for e in log])
+    log.clear()
+    await c._custom_check()
+    check("event ones aren't polled", not c._custom_was, c._custom_was)
+    st = pn.cfgmod
+    s = st.defaults("U1")
+    s["custom"] = cust
+    text = "".join(st.section_lines(s))
+    path = os.path.join(WORK, "custom-events.conf")
+    with open(path, "w") as f:
+        f.write(text)
+    check("evaluate: in pushraker.conf, read back the same",
+          "evaluate: layer" in text
+          and st.parse_custom(st.read_ini(path)) == cust, text)
+    c._by_object = False
+
+
 async def test_template_limits():
     """A template (maybe from a shared G-code file) can't hold up
     Moonraker or use up memory: the render stops itself, and what it can
@@ -3775,7 +3903,7 @@ async def run_component_tests():
               test_driver_hot,
               test_print_by_object,
               test_no_secrets_in_logs, test_config_lines, test_old_names, test_preprint,
-              test_two_fixes, test_more_notifications, test_template_variants, test_templates_sending, test_custom_notifications, test_camera_pictures, test_codemirror,
+              test_two_fixes, test_more_notifications, test_template_variants, test_templates_sending, test_custom_notifications, test_custom_events, test_camera_pictures, test_codemirror,
               test_data):
         try:
             await t()

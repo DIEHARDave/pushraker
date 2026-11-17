@@ -555,20 +555,45 @@ Add custom notification** opens the editor with three more fields:
   it as `pushraker.<name>`. Renaming a saved one warns first: G-code and
   macros that use the old name stop working, and pushraker can't change
   them.
-- **When**: a condition, as in an `if` (without `{% if %}`), checked every
-  5 seconds. The notification is sent when it turns true; a condition that
-  is already true when pushraker starts isn't. **State** under it shows
-  what it is now, True or False, with the printer's values (and the sample
-  print job when none is running). Empty: never true; sent only from
-  G-code.
-- **Send**: each time it turns true (never more than once a minute), once
-  per print job, once per print job (resets after a pause), or at most
-  every # minutes.
+- **When**: a condition, as in an `if` (without `{% if %}`). **State**
+  under it shows what it is now, True or False, with the printer's values
+  (and the sample print job when none is running). Next to When, choose
+  when it's evaluated:
+  - **every 5 seconds**: sent when it turns true; a condition that is
+    already true when pushraker starts isn't. Empty: never true; sent only
+    from G-code.
+  - **at an event**: sent each time it's true at that event. Empty: every
+    time.
+
+    | Evaluate | When | `event.*` |
+    |---|---|---|
+    | on each layer change | while printing, from layer 1 | `layer`, `previous_layer` |
+    | on each tool change | while printing, from layer 1 (not the U1's toolhead calibrations before it) | `toolhead`, `previous_toolhead` (Klipper's names: `extruder1`; `\|toolhead` for "Toolhead 2") |
+    | on each object change | printing by object: as each object starts | `object`, `previous_object` (each: `name`, `number`, `count`) |
+    | when an object is excluded | from the screen, Mainsail, Fluidd or G-code, also while paused | `object` |
+    | on each 1% of progress | while printing | `progress` (0 to 100) |
+    | on each console message | each line Klipper writes to the console | `message` |
+
+    `event.trigger` is the event (`layer`, `tool`...). Every 5 seconds
+    misses things that come and go between two looks; an event doesn't:
+    `job.layer % 5 == 0` at each layer change is every 5th layer.
+- **Send**: each time it turns true (at most 1/min; at an event: each time,
+  at most 1/10 s), once per print job, once per print job (resets after a
+  pause), or at most every # minutes.
 
 ```jinja
 printer.heater_bed.temperature < 40 and not printer.heater_bed.target
 job.progress >= 90 and job.filaments.count > 1
 printer["temperature_sensor cavity"].temperature > 55
+```
+
+At an event:
+
+```jinja
+job.layer % 5 == 0
+extruders.current.filament.material == "TPU"
+event.object.number == event.object.count
+"Probe" in event.message
 ```
 
 From G-code or a macro, whatever its condition, as `pushraker.<name>` (in
@@ -592,19 +617,25 @@ RESPOND PREFIX=notify_custom MSG="pushraker.bed_cool Layer {{ job.layer }}{% set
 On the public ntfy.sh server, G-code can't set the topic.
 
 Its title, contents and image work like any other notification's, with
-`event.name` (its name) and `event.trigger` (`condition` or `gcode`). In
+`event.name` (its name), `event.trigger` (`condition`, `gcode`, or the
+event it was evaluated at) and the event's values. In
 `pushraker.conf` each is a section of its own:
 
 ```ini
 [pushraker custom bed_cool]
 notification: on, default, no_email
+evaluate: poll
 when: printer.heater_bed.temperature < 40
 title: 🔔 {{ machine.name }} {{ event.name }}
 contents: Bed {{ printer.heater_bed.temperature|round|int }}°C
 image: camera
 camera:
-repeat: change          # change, job, job_pause, or a number of minutes
+repeat: change
 ```
+
+`evaluate`: `poll` (every 5 seconds), `layer`, `tool`, `object`,
+`excluded`, `progress` or `console`. `repeat`: `change`, `job`,
+`job_pause`, or a number of minutes.
 
 ## Notifications from macros and G-code
 

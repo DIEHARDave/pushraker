@@ -422,12 +422,18 @@ CUSTOM_SECTION = "pushraker custom "
 
 # Custom notifications: a name (letters, digits, _; it's how G-code fires
 # one: RESPOND PREFIX=notify_custom MSG=<name>), a condition (a Jinja
-# expression, checked every few seconds: sent when it turns true), and a
-# template like the built-in ones
+# expression, evaluated every few seconds: sent when it turns true; or at
+# each layer change, tool change... : sent when true), and a template like
+# the built-in ones
 CUSTOM_MAX = 20
 RX_CUSTOM_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,31}")
 CUSTOM_IMAGES = ("none", "render", "camera")
 CUSTOM_REPEATS = ("change", "job", "job_pause", "minutes")
+# When the condition is evaluated: every few seconds (poll), or at each
+# layer change, tool change, next object (printing by object), excluded
+# object, 1% of progress, console line
+CUSTOM_EVALUATES = ("poll", "layer", "tool", "object", "excluded",
+                    "progress", "console")
 WHEN_MAX = 1000
 CUSTOM_DEFAULT = {
     "enabled": True, "priority": "default", "email": False,
@@ -436,7 +442,7 @@ CUSTOM_DEFAULT = {
     # Empty: the editor shows an example; sent empty, the title stands alone
     "contents": "",
     "image": "camera", "camera": "", "topic": "",
-    "repeat": "change", "repeat_minutes": 10,
+    "repeat": "change", "repeat_minutes": 10, "evaluate": "poll",
 }
 
 
@@ -507,6 +513,10 @@ def clean_custom(items: Any, strict: bool = False) -> List[Dict[str, Any]]:
             if not 1 <= minutes <= 1440:
                 raise ConfigError(f"{name}: repeat every 1 to 1440 minutes")
             c["repeat_minutes"] = minutes
+            evaluate = str(raw.get("evaluate") or "poll")
+            if evaluate not in CUSTOM_EVALUATES:
+                raise ConfigError(f"{name}: no such evaluate")
+            c["evaluate"] = evaluate
             for field, text in (("When", when_template(c["when"])),
                                 ("title", c["title"]),
                                 ("contents", c["contents"])):
@@ -536,6 +546,7 @@ def custom_lines(s: Dict[str, Any]) -> List[str]:
         lines += ["", f"[{CUSTOM_SECTION}{c['name']}]",
                   f"notification: {'on' if c['enabled'] else 'off'}, "
                   f"{c['priority']}, {'email' if c['email'] else 'no_email'}",
+                  f"evaluate: {c['evaluate']}",
                   f"when: {escape_text(c['when'])}",
                   f"title: {escape_text(c['title'])}",
                   f"contents: {escape_text(c['contents'])}",
@@ -566,6 +577,8 @@ def parse_custom(cfg: Any) -> List[Dict[str, Any]]:
         for key in ("image", "camera", "topic"):
             if key in sec:
                 c[key] = sec.get(key).strip()
+        if "evaluate" in sec:
+            c["evaluate"] = sec.get("evaluate").strip().lower()
         repeat = (sec.get("repeat") or "change").strip().lower()
         if repeat.isdigit():
             c["repeat"], c["repeat_minutes"] = "minutes", int(repeat)

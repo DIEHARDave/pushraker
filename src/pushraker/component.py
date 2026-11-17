@@ -296,6 +296,9 @@ RX_CUSTOM_CALL = re.compile(r"pushraker\.([A-Za-z0-9_]+)(?:\s+(.*))?",
 # isn't sent again within CUSTOM_GAP of the last
 CUSTOM_INTERVAL = 5.
 CUSTOM_GAP = 60.
+# Evaluated at an event (layer change, tool change...): sent each time it's
+# true then, but not again within CUSTOM_EVENT_GAP seconds
+CUSTOM_EVENT_GAP = 10.
 MACRO_SEP = " || "
 MACRO_LEVELS = ("min", "low", "default", "high", "max")
 # (runout_exception_id: printers.py)
@@ -591,6 +594,17 @@ SAMPLE_RENDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "web", "sample-render.jpg")
 
 # event.* a notification has only sometimes: shown in the tree
+# What a custom notification evaluated at an event has in event.*
+CUSTOM_SAMPLES: Dict[str, Dict[str, Any]] = {
+    "layer": {"layer": 120, "previous_layer": 119},
+    "tool": {"toolhead": "extruder1", "previous_toolhead": "extruder"},
+    "object": {"object": {"name": "Benchy", "number": 2, "count": 4},
+               "previous_object": {"name": "Calibration cube", "number": 1,
+                                   "count": 4}},
+    "excluded": {"object": {"name": "Benchy", "number": 2, "count": 4}},
+    "progress": {"progress": 50},
+    "console": {"message": "Probe triggered at z=0.012"},
+}
 SAMPLE_EXTRA: Dict[str, Dict[str, Any]] = {
     "paused": {"planned": True, "pause": {
         "number": 1, "layer": 42, "kind": "filament change",
@@ -1048,6 +1062,12 @@ class PushNotifications:
         self._custom_err: Dict[str, str] = {}
         # A When that ran past its time, as it was: skipped until changed
         self._custom_stuck: Dict[str, str] = {}
+        # Events custom notifications can be evaluated at: the layer, 1% of
+        # progress, toolhead and excluded objects last seen in the job
+        self._ev_layer = 0
+        self._ev_pct = 0
+        self._ev_tool = ""
+        self._ev_excluded: Set[str] = set()
         self._filament_job = 0      # bumped per job; stops an old watcher
         # Print jobs started: "once per print job" (the time after a print
         # job ends still counts as that job)
@@ -1129,7 +1149,7 @@ class PushNotifications:
         self._status: Dict[str, Dict[str, Any]] = {
             "print_stats": {}, "virtual_sdcard": {}, "print_task_config": {},
             "exclude_object": {}, "machine_state_manager": {},
-            "idle_timeout": {}, ACE_OBJECT: {}}
+            "idle_timeout": {}, "toolhead": {}, ACE_OBJECT: {}}
         self._cal_busy_at = 0.      # when Klipper was last seen busy
         self._idle_was = ""         # idle_timeout.state last seen
         # Filament loaded / unloaded: last reported filament_exist per
@@ -2814,8 +2834,10 @@ class PushNotifications:
         if key == "paused":
             return {"planned": False}
         if key.startswith("custom"):
-            return {"name": str(key[len("custom_"):] or "my_notification"),
-                    "trigger": "condition"}
+            base, _, mode = key.partition("@")
+            return {"name": str(base[len("custom_"):] or "my_notification"),
+                    "trigger": mode if mode in CUSTOM_SAMPLES
+                    else "condition", **CUSTOM_SAMPLES.get(mode, {})}
         if key == "macro":
             return {"title": "Bed ready", "message": "60 °C, levelled",
                     "priority": "default"}
@@ -4217,6 +4239,12 @@ class PushNotifications:
             logging.info("[pushraker] %s is printed by object",
                          shown(filename))
         pct = self._progress() * 100.
+        # Custom notifications' events: only what happens from now on
+        self._ev_layer = int(layer)
+        self._ev_pct = int(pct)
+        self._ev_tool = str(self._status["toolhead"].get("extruder") or "")
+        self._ev_excluded = set(
+            self._status["exclude_object"].get("excluded_objects") or [])
         self._milestones_sent = {m for m in MILESTONES if m <= pct}
         self._report_next = None
         if self._first_layer_sent or self._milestones_sent:
@@ -4361,6 +4389,9 @@ class PushNotifications:
         message everything in between. On printers without this component
         the line is only console output."""
         for line in str(response or "").splitlines():
+            if line.strip() and not line.startswith(
+                    (CUSTOM_PREFIX, MACRO_PREFIX)):
+                self._custom_fire("console", {"message": line.strip()})
             if line.startswith(CUSTOM_PREFIX):
                 rest = line[len(CUSTOM_PREFIX):].strip()
                 m = RX_CUSTOM_CALL.fullmatch(rest)
@@ -4400,7 +4431,8 @@ class PushNotifications:
     # ---- custom notifications ------------------------------------------
 
     async def _send_custom(self, c: Dict[str, Any], trigger: str,
-                           extra: str = "") -> None:
+                           extra: str = "",
+                           values: Optional[Dict[str, Any]] = None) -> None:
         """Send a custom notification (its condition turned true, or
         G-code asked for it). `extra`: Jinja the G-code added, rendered on
         its own and put at the end; what it sets wins over the
@@ -4411,7 +4443,7 @@ class PushNotifications:
             return
         self._custom_sent[c["name"]] = time.monotonic()
         self._custom_job[c["name"]] = (self._job_number, self._resumes)
-        event = {"name": c["name"], "trigger": trigger}
+        event = {"name": c["name"], "trigger": trigger, **(values or {})}
         added, sets = "", {}
         if extra:
             extra = extra.replace("\\n", "\n")
@@ -4427,13 +4459,16 @@ class PushNotifications:
             event=event, sets=sets, append=added)
 
     def _custom_due(self, c: Dict[str, Any]) -> bool:
-        """Whether a condition that just turned true may send now: never
-        within a minute of the last one; once per print job, or at most
-        every N minutes, when asked."""
+        """Whether a condition that just turned true (or is true at its
+        event) may send now: never within a minute of the last one (10
+        seconds for an event); once per print job, or at most every N
+        minutes, when asked."""
         name = c["name"]
         last = self._custom_sent.get(name)
         now = time.monotonic()
-        if last is not None and now - last < CUSTOM_GAP:
+        gap = CUSTOM_GAP if c.get("evaluate", "poll") == "poll" \
+            else CUSTOM_EVENT_GAP
+        if last is not None and now - last < gap:
             return False
         if c["repeat"] == "job":
             return self._custom_job.get(name, (None,))[0] != \
@@ -4450,7 +4485,8 @@ class PushNotifications:
         for all of them; one that turns true (false before) is sent."""
         # One whose When ran too long waits until its When is changed
         items = [c for c in (self.settings or {}).get("custom") or []
-                 if c["when"] and cfgmod.custom_rid(c["name"]) in self.rows
+                 if c["when"] and c.get("evaluate", "poll") == "poll"
+                 and cfgmod.custom_rid(c["name"]) in self.rows
                  and self._custom_stuck.get(c["name"]) != c["when"]]
         live = {c["name"] for c in items}
         for name in list(self._custom_was):
@@ -4485,6 +4521,87 @@ class PushNotifications:
             self._custom_was[name] = now
             if now and was is False and self._custom_due(c):
                 self._spawn(self._send_custom(c, "condition"))
+
+    def _ps_state(self) -> str:
+        return str(self._status["print_stats"].get("state") or "")
+
+    def _custom_events(self, data: Dict[str, Any]) -> None:
+        """A status update during a print job: the events custom
+        notifications can be evaluated at. An object excluded counts while
+        paused too; the rest only while printing, and a tool change only
+        from the first layer (the U1 switches toolheads to calibrate)."""
+        ex = data.get("exclude_object") or {}
+        if "excluded_objects" in ex:
+            now = set(ex.get("excluded_objects") or [])
+            for name in sorted(now - self._ev_excluded):
+                self._custom_fire("excluded",
+                                  {"object": self._object_info(name)})
+            self._ev_excluded = now
+        printing = self._ps_state() == "printing"
+        layer = int(((self._status["print_stats"].get("info") or {})
+                     .get("current_layer")) or 0)
+        tool = (data.get("toolhead") or {}).get("extruder")
+        if tool is not None and str(tool) != self._ev_tool:
+            prev, self._ev_tool = self._ev_tool, str(tool)
+            if printing and layer >= 1 and prev:
+                self._custom_fire("tool", {"toolhead": str(tool),
+                                           "previous_toolhead": prev})
+        if not printing:
+            return
+        if layer >= 1 and layer != self._ev_layer:
+            prev, self._ev_layer = self._ev_layer, layer
+            self._custom_fire("layer", {"layer": layer,
+                                        "previous_layer": prev or None})
+        pct = int(self._progress() * 100.)
+        if pct > self._ev_pct:
+            self._ev_pct = pct
+            self._custom_fire("progress", {"progress": pct})
+
+    def _custom_fire(self, kind: str, values: Dict[str, Any]) -> None:
+        """An event happened: the custom notifications evaluated at it
+        (none: nothing to do, which is most of the time)."""
+        items = [c for c in (self.settings or {}).get("custom") or []
+                 if c.get("evaluate") == kind
+                 and cfgmod.custom_rid(c["name"]) in self.rows
+                 and self._custom_stuck.get(c["name"]) != c["when"]]
+        if items:
+            self._spawn(self._custom_event(kind, items, values))
+
+    async def _custom_event(self, kind: str, items: List[Dict[str, Any]],
+                            values: Dict[str, Any]) -> None:
+        """Evaluate each one's When at this event (empty: always true);
+        one that's true, and due, is sent."""
+        texts = [cfgmod.when_template(c["when"]) for c in items if c["when"]]
+        ctx = await self._template_context(texts) if texts else {}
+        for c in items:
+            name = c["name"]
+            if c["when"]:
+                try:
+                    true = (await self._render(
+                        cfgmod.when_template(c["when"]), dict(
+                            ctx, event={"name": name, "trigger": kind,
+                                        **values}))) == "1"
+                except jj.TemplateTimeout as e:
+                    self._custom_stuck[name] = c["when"]
+                    logging.warning("[pushraker] ⚠️ custom notification "
+                                    "%s, When: %s; not evaluated again "
+                                    "until its When is changed", name, e)
+                    continue
+                except jj.TemplateError as e:
+                    if self._custom_err.get(name) != str(e):
+                        logging.warning("[pushraker] custom notification "
+                                        "%s, When: %s", name, e)
+                        self._custom_err[name] = str(e)
+                    continue
+                self._custom_err.pop(name, None)
+                if not true:
+                    continue
+            if not self._custom_due(c):
+                continue
+            # Marked now: the next event may come before the send starts
+            self._custom_sent[name] = time.monotonic()
+            self._custom_job[name] = (self._job_number, self._resumes)
+            self._spawn(self._send_custom(c, kind, values=values))
 
     async def _custom_watch(self) -> None:
         """Custom notifications' conditions, every CUSTOM_INTERVAL
@@ -5075,6 +5192,7 @@ class PushNotifications:
                                                    "action_code"]}
                         if "machine_state_manager" in objs else {}),
                      **{"idle_timeout": ["state"]},
+                     **{"toolhead": ["extruder"]},
                      **({ACE_OBJECT: ACE_FIELDS} if self._ace_on else {}),
                      **{f: None for f in self._feeds},
                      **chamber),
@@ -5133,6 +5251,8 @@ class PushNotifications:
             self._track_ace()
         if self._job_active and self._ch:
             self._track_chamber()
+        if self._job_active:
+            self._custom_events(data)
         if not self._job_active or ps.get("state") != "printing":
             return
         filename = ps.get("filename") or ""
@@ -5536,6 +5656,12 @@ class PushNotifications:
         if cur and cur != self._obj_cur:
             prev = self._obj_cur
             self._obj_cur = cur
+            if cur not in self._obj_start and \
+                    self._ps_state() == "printing":
+                self._custom_fire("object", {
+                    "object": self._object_info(cur),
+                    "previous_object": self._object_info(prev)
+                    if prev else None})
             self._obj_start.setdefault(cur, layer)
             if prev is not None and prev != cur and \
                     prev not in (ex.get("excluded_objects") or []):

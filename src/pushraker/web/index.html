@@ -922,14 +922,18 @@
         updateRowDimming();
     }
 
+    // A custom notification evaluated at an event, in its row
+    const EVALUATE_ROW = { layer: 'At each layer change', tool: 'At each tool change', object: 'At each object',
+        excluded: 'When an object is excluded', progress: 'At each 1%', console: 'At each console line' };
     // Custom notifications' rows, and ➕ Add
     function renderCustomRows() {
         const max = state.meta.custom_max || 20;
         el('nt-crows').innerHTML = `<tr class="nt-group"><td colspan="4">Custom</td></tr>` + customs.map(c => {
             const id = c._id;
+            const at = EVALUATE_ROW[c.evaluate] || '';
             const when = c.when.trim()
-                ? `<span class="nt-sub">When <code>${esc(c.when.length > 70 ? c.when.slice(0, 70) + '…' : c.when)}</code></span>`
-                : '<span class="nt-sub">Sent only from G-code</span>';
+                ? `<span class="nt-sub">${at ? at + ', when' : 'When'} <code>${esc(c.when.length > 70 ? c.when.slice(0, 70) + '…' : c.when)}</code></span>`
+                : `<span class="nt-sub">${at || 'Sent only from G-code'}</span>`;
             return `<tr class="nt-crow" data-crow="${id}">
                 <td><span class="nt-icon">🔔</span><span class="nt-name">${esc(c.name)}</span>${when}<span class="nt-sub nt-data-inline"><span class="nt-dim"><button type="button" class="btn btn-secondary nt-data-btn" data-ctpl="${id}">Edit</button></span></span></td>
                 <td class="nt-c nt-col-push"><input type="checkbox" data-cenabled="${id}"${c.enabled ? ' checked' : ''}></td>
@@ -991,7 +995,7 @@
     let savedCustoms = '{}';
     let customSeq = 0;
     let draft = null;       // a new one, until Done
-    const CUSTOM_FIELDS = ['name', 'enabled', 'priority', 'email', 'when', 'title', 'contents', 'image', 'camera', 'topic', 'repeat', 'repeat_minutes'];
+    const CUSTOM_FIELDS = ['name', 'enabled', 'priority', 'email', 'evaluate', 'when', 'title', 'contents', 'image', 'camera', 'topic', 'repeat', 'repeat_minutes'];
     const RX_CUSTOM_NAME = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
     const isCustom = key => String(key).startsWith('custom:');
     const customById = id => customs.find(c => c._id === id) || (draft && draft._id === id ? draft : null);
@@ -1109,7 +1113,7 @@
         // What the tree says each item has (event.* lists)
         let found = null;
         const walk = n => { if (n.expr === list && n.item) found = n.item; (n.children || []).forEach(walk); };
-        const ck = editing ? (isCustom(editing.key) ? 'custom' : editing.key) : '';
+        const ck = editing ? catKey(editing.key) : '';
         (catalogues[ck] || []).forEach(c => (c.children || []).forEach(walk));
         if (found) return found;
         if (LOOP_FIELDS[list]) return LOOP_FIELDS[list];
@@ -1218,29 +1222,38 @@
     const PH_WHEN = '"benchy" or "Benchy" in job.file';
     const PH_CONTENTS = '🚢 Benchy McBenchface{% if job.objects.count >= 2 %}s{% endif %}, coming through! ⛵';
     const phSpan = { when: document.createElement('span'), contents: document.createElement('span') };
-    // MOCKUP: what Check changes in the editor
-    const CHECKS = {
+    // When a custom notification's When is evaluated: what the editor says
+    // for each (tooltip, the first Send option, the example)
+    const EVALUATES = {
         poll: { info: 'A condition, evaluated every 5 seconds: sent when it turns true. Empty: sent only from G-code.',
                 send: 'each time it turns true (at most 1/min)', ph: PH_WHEN },
         layer: { info: 'Evaluated at each layer change while printing: sent when true. Empty: every layer.', ph: 'job.layer % 5 == 0' },
         tool: { info: 'Evaluated at each tool change while printing (not before the first layer): sent when true. Empty: every tool change.', ph: 'extruders.current.filament.material == "TPU"' },
-        object: { info: 'Evaluated each time the printer moves to the next object (printing by object, or Exclude objects): sent when true. Empty: every object.', ph: 'event.object == job.objects.names[-1]' },
-        excluded: { info: 'Evaluated when an object is excluded, from the screen, Mainsail, Fluidd or G-code: sent when true. Empty: every excluded object.', ph: '"Benchy" in event.object' },
+        object: { info: 'Evaluated each time the printer starts the next object, when printing by object: sent when true. Empty: every object.', ph: 'event.object.number == event.object.count' },
+        excluded: { info: 'Evaluated when an object is excluded, from the screen, Mainsail, Fluidd or G-code: sent when true. Empty: every excluded object.', ph: '"Benchy" in event.object.name' },
         progress: { info: 'Evaluated at each 1% of progress while printing: sent when true. Empty: every 1%.', ph: 'event.progress % 10 == 0' },
         console: { info: 'Evaluated at each line Klipper writes to the console: sent when true. Empty: every line.', ph: '"Probe" in event.message' }
     };
-    function mockCheck() {
-        const c = CHECKS[el('pr-check').value], poll = el('pr-check').value === 'poll';
+    function showEvaluate() {
+        const v = el('pr-check').value, c = EVALUATES[v] || EVALUATES.poll, poll = v === 'poll';
         el('pr-when-i').dataset.info = c.info;
         el('pr-repeat').options[0].textContent = poll ? c.send : 'each time (at most 1/10 s)';
         phSpan.when.textContent = c.ph;
         el('pr-when').placeholder = c.ph;
         if (whenView) whenView.dispatch({});
     }
+    // The values tree and samples for a custom notification depend on
+    // when its When is evaluated (event.layer at a layer change...)
+    function catKey(key) {
+        if (!isCustom(key)) return key;
+        const ev = editing && editing.evaluate && editing.evaluate !== 'poll' ? '@' + editing.evaluate : '';
+        return 'custom' + ev;
+    }
     function setPlaceholders(custom) {
         phSpan.when.textContent = PH_WHEN;
         phSpan.contents.textContent = custom ? PH_CONTENTS : '';
         el('pr-when').placeholder = PH_WHEN;
+        if (custom) showEvaluate();
         el('pr-data-text').placeholder = custom ? PH_CONTENTS : '';
     }
     function textareaField(t, isContents) {
@@ -1375,6 +1388,7 @@
             if (/^pushraker\./i.test(nm.value)) nm.value = nm.value.replace(/^pushraker\./i, '');
             editing.name = nm.value.trim();
             editing.when = field('when').get();
+            editing.evaluate = el('pr-check').value;
             editing.repeat = el('pr-repeat').value;
             editing.repeat_minutes = Math.max(1, Math.min(1440, parseInt(el('pr-rmin').value, 10) || 10));
             el('pr-rmin-wrap').style.display = editing.repeat === 'minutes' ? '' : 'none';
@@ -1438,7 +1452,7 @@
         try {
             const custom = isCustom(editing.key);
             r = await api('/server/pushraker/preview', 'POST', {
-                key: custom ? 'custom_' + (editing.name || 'my_notification') : editing.key,
+                key: custom ? 'custom_' + (editing.name || 'my_notification') + catKey(editing.key).slice(6) : editing.key,
                 title: editing.title, contents: editing.contents, when: custom ? editing.when : ''
             });
         } catch (e) {
@@ -1570,6 +1584,8 @@
             el('pr-cname').value = editing.name;
             el('pr-when').value = editing.when;
             if (whenView) field('when').set(editing.when);
+            el('pr-check').value = editing.evaluate || 'poll';
+            showEvaluate();
             el('pr-repeat').value = editing.repeat;
             el('pr-rmin').value = editing.repeat_minutes;
             el('pr-now').innerHTML = '';
@@ -1594,7 +1610,7 @@
         await mountEditor();
         fillEditor();
         activeField = isCustom(key) && !editing.when ? 'when' : 'contents';
-        await renderPicker(await loadCatalogue(isCustom(key) ? 'custom' : key));
+        await renderPicker(await loadCatalogue(catKey(key)));
         // From the top (a new one: on its name)
         el('pr-data').querySelector('.pr-modal-box').scrollTop = 0;
         if (isCustom(key) && !editing.name) el('pr-cname').focus({ preventScroll: true });
@@ -1682,7 +1698,11 @@
     };
     el('pr-cname').oninput = el('pr-when').oninput = editorChanged;
     el('pr-repeat').onchange = el('pr-rmin').oninput = editorChanged;
-    el('pr-check').onchange = mockCheck;
+    el('pr-check').onchange = async () => {
+        showEvaluate();
+        editorChanged();
+        if (editing) await renderPicker(await loadCatalogue(catKey(editing.key)));
+    };
     el('pr-when').onfocus = () => { activeField = 'when'; updateJinjaPane(); };
     ['pr-cname'].forEach(id => { el(id).onfocus = () => { el('pr-blocks').style.display = ''; }; });
 
@@ -1753,7 +1773,7 @@
     function completionNames() {
         const out = new Set(['printer', 'job', 'extruders', 'event', 'machine', 'loop.index', 'loop.first', 'loop.last']);
         const walk = n => { if (n.expr) out.add(n.expr.replace(/#/g, '1')); (n.children || []).forEach(walk); };
-        const ck = editing ? (isCustom(editing.key) ? 'custom' : editing.key) : '';
+        const ck = editing ? catKey(editing.key) : '';
         (catalogues[ck] || []).forEach(c => (c.children || []).forEach(walk));
         const loop = editing ? loopAt(field('contents').get(), field('contents').sel()[0]) : null;
         if (loop) loopFields(loop.list).forEach(k => out.add(loop.name + '.' + k));
