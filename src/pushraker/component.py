@@ -2582,7 +2582,7 @@ class PushNotifications:
             if out.get("children"):
                 out["children"] = [rename(c) for c in out["children"]]
             return out
-        return tp.node("current", hint=f"in use now: toolhead {i + 1}",
+        return tp.node("current",
                        info="The toolhead in use, with all its values: "
                        "extruders.current.filament.material is the "
                        "material in whichever toolhead is printing.",
