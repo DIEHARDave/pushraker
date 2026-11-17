@@ -2610,7 +2610,7 @@ async def test_more_notifications():
     pn.PL_CAMERA_WAIT = 0.
     await c._check_power_loss()
     check("power loss names the interrupted print job",
-          log and log[-1]["title"] == "⚡ U1 power loss"
+          log and log[-1]["title"] == "🔌 U1 power loss"
           and log[-1]["body"].startswith("Big_part\nPrint interrupted"),
           log and log[-1])
     STATE.pop("webhooks", None)

@@ -203,7 +203,7 @@ TITLES = {
     "error": "⚠️ {name} Error: {kind}",
     "warning": "⚠️ {name} Warning",
     "shutdown": "🛑 {name} Error: shutdown",
-    "power_loss": "⚡ {name} power loss",
+    "power_loss": "🔌 {name} power loss",
     "driver_hot": "🌡️ {name} driver running hot",
     "filament_loaded": "🧵 {name} filament loaded",
     "filament_unloaded": "🧵 {name} filament unloaded",
