@@ -70,6 +70,10 @@ ROWS = [
      False),
     ("cancelled", "Print cancelled", "🚫", True, "default", "snapshot",
      "print", False),
+    # After a print ends (complete, cancelled or failed), once the bed is below
+    # bed_cool_temp: the print can come off
+    ("bed_cooled", "Bed cooled", "🧊", True, "default", "snapshot", "print",
+     False),
     ("macro", "From macros and G-code", "📣", True, "default", "snapshot",
      "print", False),
     ("calibration", "Manual calibrations", "📐", True, "high", "snapshot",
@@ -132,6 +136,7 @@ TEMPLATES = [
      JOB_IMAGES),
     ("complete", "complete", "Print complete", "camera", JOB_IMAGES),
     ("cancelled", "cancelled", "Print cancelled", "camera", JOB_IMAGES),
+    ("bed_cooled", "bed_cooled", "Bed cooled", "render", JOB_IMAGES),
     ("macro", "macro", "From macros and G-code", "camera", JOB_IMAGES),
     ("calibration", "calibration", "Manual calibrations", "camera",
      JOB_IMAGES),
@@ -260,7 +265,8 @@ STRING_FIELDS = ("provider", "server", "topic", "auth", "username",
 # Free text with line breaks (stored with \n escaped)
 SECRET_FIELDS = ("secret", "email_password", "webhook_url")
 INT_FIELDS = ("layers_complete", "email_port", "filament_low_percent",
-              "filament_low_grams", "driver_temp", "report_interval")
+              "filament_low_grams", "driver_temp", "report_interval",
+              "bed_cool_temp")
 BOOL_FIELDS = ("enabled", "push_enabled", "email_enabled", "webhook_enabled",
                "filament_unknown")
 # Settings the form fills in for common providers
@@ -384,6 +390,7 @@ def _defaults(name: str) -> Dict[str, Any]:
         # "" for the printer's default
         "time_left": "",
         "driver_temp": 105,     # °C, X or Y stepper driver (row: driver_hot)
+        "bed_cool_temp": 40,    # °C, the bed after a print (row: bed_cooled)
         "report_interval": 30,  # minutes of print time between status reports
         "email_enabled": False,
         "webhook_enabled": False,
@@ -936,6 +943,13 @@ def validate(data: Dict[str, Any], current: Dict[str, Any],
             raise ConfigError("Driver temperature must be a number", "driver_temp")
     if not 40 <= s["driver_temp"] <= 150:
         raise ConfigError("Driver running hot: the temperature must be 40 to 150 °C", "driver_temp")
+    if "bed_cool_temp" in data:
+        try:
+            s["bed_cool_temp"] = int(data["bed_cool_temp"])
+        except (TypeError, ValueError):
+            raise ConfigError("Bed temperature must be a number", "bed_cool_temp")
+    if not 20 <= s["bed_cool_temp"] <= 100:
+        raise ConfigError("Bed cooled: the temperature must be 20 to 100 °C", "bed_cool_temp")
     if "report_interval" in data:
         try:
             s["report_interval"] = int(data["report_interval"])
@@ -1631,6 +1645,8 @@ def render_options(s: Dict[str, Any], env: Env) -> Dict[str, str]:
         out["filament_change_events"] = s["filament_change_events"]
     if "driver_hot" in rows:
         out["driver_temp"] = str(s["driver_temp"])
+    if "bed_cooled" in rows:
+        out["bed_cool_temp"] = str(s["bed_cool_temp"])
     if "status_report" in rows:
         out["report_interval"] = str(s["report_interval"])
     tz = time_zone(s)

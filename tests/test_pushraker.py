@@ -2364,6 +2364,65 @@ async def test_driver_hot():
           and "X driver: 109 °C (alert" in hot[1]["body"], len(hot))
 
 
+async def test_bed_cooled():
+    print("Bed cooled: after a print ends, once the bed is below the limit")
+    reset_world()
+    log = []
+    ntfy = FakeService(log, "ntfy")
+    server, c = make({"bed_cool_temp": "40"},
+                     {"bed_cooled": [("ntfy", ntfy, False)]})
+    poll = pn.BED_COOL_POLL
+    pn.BED_COOL_POLL = 0.1
+    events = server.handlers["job_state:state_changed"]
+    try:
+        STATE["heater_bed"] = {"temperature": 60.0, "target": 60.0}
+        await start_job(server)
+        STATE["print_stats"] = ps("complete")
+        await events(JobEvent.COMPLETE, {}, STATE["print_stats"])
+        STATE["heater_bed"] = {"temperature": 52.0, "target": 0.0}
+        await asyncio.sleep(0.3)
+        check("not while the bed is over 40 °C", not log, log)
+        STATE["heater_bed"] = {"temperature": 39.4, "target": 0.0}
+        await asyncio.sleep(0.4)
+        check("sent once below 40 °C, with the file and how it ended",
+              len(log) == 1 and log[0]["title"].endswith(
+                  "bed cooled to 40 °C")
+              and "Bed 39 °C," in log[0]["body"]
+              and "after the print finished" in log[0]["body"],
+              [(e["title"], e["body"]) for e in log])
+        log.clear()
+        # Cancelled, then a new print job starts before it cools
+        STATE["heater_bed"] = {"temperature": 60.0, "target": 60.0}
+        await start_job(server)
+        STATE["print_stats"] = ps("cancelled")
+        await events(JobEvent.CANCELLED, {}, STATE["print_stats"])
+        await asyncio.sleep(0.2)
+        await start_job(server)
+        STATE["heater_bed"] = {"temperature": 30.0, "target": 0.0}
+        await asyncio.sleep(0.4)
+        check("not when a new print job starts first", not log, log)
+        # A bed already below the limit when the print ends: nothing
+        STATE["print_stats"] = ps("cancelled")
+        await events(JobEvent.CANCELLED, {}, STATE["print_stats"])
+        await asyncio.sleep(0.4)
+        check("not when the bed was already below it", not log, log)
+        # Failed
+        STATE["heater_bed"] = {"temperature": 70.0, "target": 70.0}
+        await start_job(server)
+        STATE["print_stats"] = ps("error")
+        await events(JobEvent.ERROR, {}, STATE["print_stats"])
+        await asyncio.sleep(0.2)
+        STATE["heater_bed"] = {"temperature": 35.0, "target": 0.0}
+        await asyncio.sleep(0.4)
+        check("after a failed print too",
+              [e for e in log if "bed cooled" in e["title"]]
+              and "after the print failed" in [
+                  e for e in log if "bed cooled" in e["title"]][0]["body"],
+              [(e["title"], e["body"]) for e in log])
+    finally:
+        pn.BED_COOL_POLL = poll
+
+
 async def test_print_by_object():
     print("Print by object: layer and object notifications")
     reset_world()
@@ -3959,7 +4018,7 @@ async def run_component_tests():
               test_fault_dedup, test_same_preparation_everywhere,
               test_email_threads, test_filament_measured, test_filament_alerts,
               test_faults_over_a_job, test_spool_switch, test_ace, test_file_pauses, test_file_mode, test_generic_printer, test_status_report, test_time_left, test_calibration, test_gotify, test_image_names, test_fault_emoji, test_send_gap, test_macro_notify, test_render_thread, test_job_moments, test_current_extruder, test_macro_topic, test_template_limits, test_now_values, test_queue_line, test_chamber, test_filament_change, test_backup_order, test_console,
-              test_driver_hot,
+              test_driver_hot, test_bed_cooled,
               test_print_by_object,
               test_no_secrets_in_logs, test_config_lines, test_old_names, test_preprint,
               test_two_fixes, test_more_notifications, test_template_variants, test_templates_sending, test_custom_notifications, test_custom_events, test_camera_pictures, test_codemirror,

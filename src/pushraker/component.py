@@ -113,6 +113,7 @@ ROW_IDS = (
     "started", "preprint_done", "layer_started", "first_layer", "progress_25", "progress_50", "progress_75",
     "status_report",
     "paused", "file_pause", "resumed", "object_complete", "complete", "cancelled",
+    "bed_cooled",
     "calibration",
     "chamber_waiting", "chamber_reached", "chamber_fault",
     "filament_change",
@@ -205,6 +206,7 @@ TITLES = {
     "shutdown": "🛑 {name} Error: shutdown",
     "power_loss": "🔌 {name} power loss",
     "driver_hot": "🌡️ {name} driver running hot",
+    "bed_cooled": "🧊 {name} bed cooled to {limit} °C",
     "filament_loaded": "🧵 {name} filament loaded",
     "filament_unloaded": "🧵 {name} filament unloaded",
     "filament_short": "🧵 {name} not enough filament",
@@ -405,6 +407,11 @@ GCODE_EXTS = (".gcode", ".gco", ".g")
 # job paused for the heat and resumed can warn a second time)
 # (drivers: printers.py, found from the object list)
 DRIVER_HOT_DEFAULT = 105
+# Bed cooled: the bed is looked at this often after a print ends, for at
+# most this long (a bed held hot by hand never sends)
+BED_COOL_DEFAULT = 40
+BED_COOL_POLL = 15.
+BED_COOL_MAX = 3 * 3600.
 # Print-by-object (Orca "print_sequence = by object"): the slicer's config
 # block at the end of the file says so, and its EXCLUDE_OBJECT markers tell
 # Klipper which object is being printed. Layer numbers run on across the
@@ -1037,6 +1044,9 @@ class PushNotifications:
         # The option is driver_temp: driver_hot is the row
         self.driver_hot: float = num(
             "driver_temp", DRIVER_HOT_DEFAULT, 40., 150.)
+        # Bed cooled: below this after a print ends (the row: bed_cooled)
+        self.bed_cool: float = num(
+            "bed_cool_temp", BED_COOL_DEFAULT, 20., 100.)
         # Status report: every this many minutes of print time
         self.report_interval: float = num("report_interval", 30., 1., 720.)
         self.web_ui_url: str = get("web_ui_url", "")
@@ -2910,6 +2920,9 @@ class PushNotifications:
             return {"calibration": {"name": "Bed levelling",
                                     "result": "complete",
                                     "next": "Flow calibration"}}
+        if key == "bed_cooled":
+            return {"kind": "complete", "file": file, "limit": 40,
+                    "temperature": 39., "cooled_in": "14m"}
         if key == "driver_hot":
             return {"limit": 105, "drivers": [
                 {"name": "X", "temperature": 108., "hot": True},
@@ -4250,6 +4263,11 @@ class PushNotifications:
             self._job_active = False
             self._job_ended = time.monotonic()
             self._job_gen += 1
+            # Any end of a print: Bed cooled starts waiting
+            self._spawn(self._watch_bed(
+                "complete" if job_event == JobEvent.COMPLETE
+                else "error" if job_event == JobEvent.ERROR
+                else "cancelled", ps.get("filename") or ""))
             self._filament_job += 1
 
     async def _start_job(self, filename: str, query: bool = True) -> float:
@@ -4387,6 +4405,55 @@ class PushNotifications:
             else None
         await self._send(rid, title, body, snapshot=snapshot,
                          snapshot_ready=True, event=event)
+
+    async def _watch_bed(self, ended: str, filename: str) -> None:
+        """Bed cooled: after a print ends (complete, cancelled or failed), once
+        the bed is below the set temperature. Not when it already was (an
+        unheated bed), when a new print job starts, or after
+        BED_COOL_MAX."""
+        if "bed_cooled" not in self.rows:
+            return
+        job, start = self._job_number, time.monotonic()
+        limit = self.bed_cool
+        first = True
+        while time.monotonic() - start < BED_COOL_MAX:
+            if self._job_number != job:
+                self._skip("bed_cooled", "a new print job started")
+                return
+            try:
+                state = await self._query({"heater_bed": ["temperature"]})
+            except Exception as e:
+                logging.info("[pushraker] bed_cooled: %s", e)
+                state = {}
+            bed = state.get("heater_bed")
+            if first and not bed:
+                self._skip("bed_cooled", "no heated bed")
+                return
+            temp = (bed or {}).get("temperature")
+            if temp is not None and float(temp) < limit:
+                if first:
+                    self._skip("bed_cooled", f"the bed was already below "
+                               f"{limit:.0f} °C")
+                    return
+                if self._job_number != job:
+                    return
+                took = format_duration(time.monotonic() - start)
+                await self._send(
+                    "bed_cooled",
+                    self._title("bed_cooled", limit=f"{limit:.0f}"),
+                    f"{shown(filename)}\nBed {float(temp):.0f} °C, {took} "
+                    "after the print "
+                    + {"complete": "finished",
+                       "error": "failed"}.get(ended, "was cancelled"),
+                    filename=filename,
+                    event={"kind": ended, "file": shown(filename),
+                           "limit": limit, "temperature": float(temp),
+                           "cooled_in": took})
+                return
+            first = False
+            await asyncio.sleep(BED_COOL_POLL)
+        self._skip("bed_cooled", f"the bed stayed over {limit:.0f} °C for "
+                   f"{format_duration(BED_COOL_MAX)}")
 
     # ---- job queue -----------------------------------------------------
 

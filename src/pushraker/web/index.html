@@ -930,6 +930,9 @@
             const driver = meta.id === 'driver_hot'
                 ? `<span class="nt-sub">X or Y driver over <input class="nt-input nt-layer nt-deg" id="nt-driver-hot" type="number" min="40" max="150" inputmode="numeric" value="${state.driver_temp}"> °C</span>`
                 : '';
+            const bed = meta.id === 'bed_cooled'
+                ? `<span class="nt-sub">After a print ends, bed below <input class="nt-input nt-layer nt-deg" id="nt-bed-cool" type="number" min="20" max="100" inputmode="numeric" value="${state.bed_cool_temp}"> °C</span>`
+                : '';
             const marks = meta.id === 'progress'
                 ? `<span class="nt-sub">${(state.meta.progress_marks || [25, 50, 75]).map(m =>
                     `<label style="margin-right:12px; white-space:nowrap"><input type="checkbox" id="nt-pm-${m}"${progressMarks().includes(m) ? ' checked' : ''}> ${m}%</label>`).join('')}</span>`
@@ -957,7 +960,7 @@
                     ? '<span class="nt-sub"><code>RESPOND PREFIX=notify MSG="Title || Message || priority"</code> (priority optional)</span>'
                     : '';
             return html + `<tr data-row="${meta.id}">
-                <td><span class="nt-icon">${meta.icon}</span>${layer ? `${layer} <span class="nt-name">layer complete</span>` : `<span class="nt-name">${esc(meta.label)}</span>`}${objects}${marks}${driver}${report}${calib}<span class="nt-sub nt-data-inline"><span class="nt-dim">${editButton(meta.id)}</span></span></td>
+                <td><span class="nt-icon">${meta.icon}</span>${layer ? `${layer} <span class="nt-name">layer complete</span>` : `<span class="nt-name">${esc(meta.label)}</span>`}${objects}${marks}${driver}${bed}${report}${calib}<span class="nt-sub nt-data-inline"><span class="nt-dim">${editButton(meta.id)}</span></span></td>
                 <td class="nt-c nt-col-push"><input type="checkbox" data-enabled="${meta.id}"${row.enabled ? ' checked' : ''}></td>
                 <td class="nt-c nt-col-email"><input type="checkbox" data-email="${meta.id}"${row.email ? ' checked' : ''}></td>
                 <td class="nt-data"><span class="nt-dim">${editButton(meta.id)}</span></td>
@@ -2329,7 +2332,7 @@
             // Outlined once the rows are drawn
             setTimeout(() => {
                 liveCheckAll();
-                const FIELD_INPUT = { driver_temp: 'nt-driver-hot', report_interval: 'nt-report-interval', layers_complete: 'nt-layers', email_port: 'nt-email-port', filament_low_percent: 'nt-fl-percent' };
+                const FIELD_INPUT = { driver_temp: 'nt-driver-hot', bed_cool_temp: 'nt-bed-cool', report_interval: 'nt-report-interval', layers_complete: 'nt-layers', email_port: 'nt-email-port', filament_low_percent: 'nt-fl-percent' };
                 const input = el(FIELD_INPUT[pb.field] || '');
                 if (input) {
                     input.classList.add('nt-bad');
@@ -2545,6 +2548,7 @@
             first_layer_objects: el('nt-layer-objects').value,
             filament_change_events: ['loaded', 'unloaded'].filter(e => el('nt-fc-' + e).checked).join(','),
             driver_temp: parseInt(el('nt-driver-hot').value, 10) || 105,
+            bed_cool_temp: el('nt-bed-cool') ? parseInt(el('nt-bed-cool').value, 10) || 40 : state.bed_cool_temp,
             report_interval: parseInt(el('nt-report-interval').value, 10) || 30,
             complete_objects: el('nt-complete-objects').value,
             filament_low_percent: parseInt(el('nt-fl-percent').value, 10) || 0,

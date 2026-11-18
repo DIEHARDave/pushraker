@@ -29,6 +29,7 @@ server), and/or to a webhook for home automation.
 | ⏱️ Status report | Camera | Off by default. Every N minutes of print time (5 to 720, default 30; a pause stops the clock), the first one an interval after the start: progress, layer ("42% complete, layer 120 of 285."), time left and ETA, with the picture |
 | ✅ Print complete | Camera | Includes print time, and the prints still in the job queue with their total time. When printing by object: once per object as each one finishes and the next begins ("📦 object complete", with which object, e.g. "Object 2 of 3: Assembly", and time left; the last object's is the Print complete notification itself; `event.object` in the template), or once per print job |
 | 🚫 Print cancelled | Camera | |
+| 🧊 Bed cooled | Render | After a print ends (complete, cancelled or failed), once the bed is below the set temperature (default 40 °C): the print can come off. Not when the bed was already below it, when a new print starts first, or when it stays hot for 3 hours. The bed is looked at every 15 seconds |
 | 📐 Manual calibrations | Camera | Calibrations started from the touchscreen (bed levelling, XYZ offset, flow, input shaper): "📐 … Bed levelling complete" when one finishes (or hands over to the next queued one), "📐 … failed" when the printer drops into its abnormal state instead, and "👋 … user intervention needed" when one reaches a step that waits for you (brush the nozzle of Toolhead N; the screen waiting for a tap: nothing running in Klipper for more than 15 s). Not for the bed mesh inside a print job's start routine |
 | 📣 From macros and G-code | Camera | Sent by any macro or G-code line: `RESPOND PREFIX=notify MSG="<title> \|\| <message> \|\| <priority>"` (see [Notifications from macros](#notifications-from-macros-and-g-code)) |
 | 🧵 Filament loaded / unloaded | Spool | Off by default. When filament is loaded into or unloaded from a toolhead (the printer's own detection), with the toolhead and the filament, drawn as a spool in its colour (a multi-colour filament as wedges, one per colour); with Spoolman, the spool's name and how much is left. Loaded and unloaded can be ticked separately. Not during a print job: runouts and refills have their own notifications |
@@ -517,6 +518,7 @@ the tree lists what each one has. For example:
 | From macros and G-code | `event.title` `event.message` `event.priority` |
 | Manual calibrations | `event.calibration.name` `.result` `.next` |
 | Driver running hot | `event.limit`, `event.drivers` (each: `name`, `temperature`, `hot`) |
+| Bed cooled | `event.kind` (how the print ended: `complete`, `cancelled`, `error`), `event.file`, `event.limit` (the set temperature), `event.temperature`, `event.cooled_in` (how long it took) |
 | Chamber | `event.chamber.temperature` `.target`; faults: `.kind` `.stalled_minutes` `.waiting` |
 | Filament loaded / unloaded | `event.loaded`, `event.extruder`, `event.filament.name` `.grams_left` `.grams_full` `.spool_id` |
 | Not enough filament, Spool running low | `event.count`, `event.issues` (each: `extruder`, `name`, `grams_left`, `grams_needed`, `status`, `refill`, `backups`, `together`, `blockers`, …) |
@@ -937,6 +939,7 @@ camera: case                 # a Moonraker webcam name; empty for none
 name: U1
 layers_complete: 2
 driver_temp: 105             # °C, X or Y stepper driver
+bed_cool_temp: 40            # °C, the bed after a print (Bed cooled)
 # When printing by object: each | once
 first_layer_objects: each
 complete_objects: each
