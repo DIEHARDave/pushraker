@@ -894,7 +894,8 @@ class PushNotifications:
                          self._ep_preview_image),
                         ("codemirror", ["GET", "POST"], self._ep_codemirror),
                         ("codemirror_js", ["GET"], self._ep_codemirror_js),
-                        ("status", ["GET"], self._ep_status)):
+                        ("status", ["GET"], self._ep_status),
+                        ("backup", ["POST"], self._ep_backup)):
                     try:
                         self.server.register_endpoint(
                             f"{base}/{path}", methods, handler)
@@ -1434,6 +1435,70 @@ class PushNotifications:
                 "rows": sorted(self.rows),
                 "cameras": sorted(self.env.cameras),
                 "spoolman": bool(self.env.spoolman_url)}
+
+    async def _ep_backup(self, web_request: Any) -> Dict[str, Any]:
+        """The saved settings as a backup file (no tokens, passwords or
+        webhook URL): for the page to download, or sent as a file by the
+        push service or by email (to the address the page gives), even
+        with notifications off."""
+        assert self.store is not None
+        await self._refresh()
+        args = web_request.get_args()
+        how = str(args.get("how") or "download")
+        s = self.settings
+        now = datetime.datetime.now(self.tz)
+        data = cfgmod.backup(s, __version__, now.isoformat(timespec="seconds"))
+        name = cfgmod.backup_name(s, now.strftime("%Y-%m-%d"))
+        if how == "download":
+            return {"name": name, "backup": data}
+        if how not in ("push", "email"):
+            raise self.server.error("Invalid request", 400)
+        targets = cfgmod.backup_targets(s)
+        on = dict(s, enabled=True, push_enabled=True, email_enabled=True)
+        title = f"💾 {s['name']} settings backup"
+        body = ("pushraker settings backup. Not included: tokens, "
+                "passwords, webhook URLs.")
+        if how == "push":
+            if targets["push"]:
+                raise self.server.error(targets["push"], 400)
+            url = cfgmod.row_url(on, "test", "default", self.env)
+            what = targets["push_label"]
+        else:
+            if targets["email"]:
+                raise self.server.error(targets["email"], 400)
+            to = str(args.get("to") or "").strip()
+            if not cfgmod.RX_EMAIL.fullmatch(to):
+                raise self.server.error("Enter an email address to send "
+                                        "the backup to", 400)
+            url = cfgmod.email_url(dict(on, email_to=to), inline=False)
+            what = to
+            if email_html is not None:
+                body = email_html.render(title, body, [], "info", None,
+                                         now, s["name"])
+        ap = apprise.Apprise()
+        if not ap.add(url):
+            raise self.server.error("Could not build an address from the "
+                                    "saved settings", 400)
+        for srv in ap:
+            srv.socket_connect_timeout = max(
+                srv.socket_connect_timeout, SEND_CONNECT_TIMEOUT)
+            srv.socket_read_timeout = max(
+                srv.socket_read_timeout, SEND_READ_TIMEOUT)
+        channel = "email" if how == "email" else url.split(":", 1)[0]
+        tmp = tempfile.mkdtemp(prefix="pushraker-backup-")
+        try:
+            path = os.path.join(tmp, name)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            self.apprise_log.take(channel)
+            ok = await ap.async_notify(title=title, body=body, attach=path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        if not ok:
+            why = short_cause(self.apprise_log.take(channel))
+            raise self.server.error(f"Not sent to {what}"
+                                    + (f" ({why})" if why else ""), 502)
+        return {"name": name, "sent": what}
 
     async def _ep_test(self, web_request: Any) -> Dict[str, Any]:
         """Send a test notification with the settings the page holds (not

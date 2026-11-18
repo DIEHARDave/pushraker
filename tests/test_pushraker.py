@@ -1265,7 +1265,7 @@ async def test_file_mode():
               "pushraker", "push_notifications")
               for p in ("config", "test", "objects", "preview",
                         "preview_image", "codemirror", "codemirror_js",
-                        "status")}
+                        "status", "backup")}
           and c.rows == {} and c.store is not None)
     STATE["print_stats"] = ps("standby")
     await server.handlers["server:klippy_ready"]()
@@ -1403,6 +1403,65 @@ async def test_file_mode():
               and any(l.startswith("Sent to https://ntfy.example.com/u1")
                       for l in res["lines"])
               and res["lines"][-1] == "Test notification sent.", res)
+        # Backup: the saved settings, no secrets; downloaded or sent
+        saved_s = dict(c.settings, server="https://ntfy.example.com",
+                       provider="ntfy", topic="u1", secret="tok123", email_password="pw456",
+                       webhook_url="https://hook.example.com/abc789",
+                       secret_for="x", email_host="smtp.example.com",
+                       email_from="u1@example.com",
+                       email_to="me@example.com", email_enabled=False)
+        c.settings = saved_s
+        c.store.changed = lambda: False
+        bk = await server.endpoints["/server/pushraker/backup"](
+            WebRequest("POST", {"how": "download"}))
+        text = json.dumps(bk)
+        check("backup: the saved settings, without tokens, passwords or "
+              "the webhook URL",
+              bk["backup"]["pushraker_backup"] == 1
+              and bk["backup"]["settings"]["topic"] == saved_s["topic"]
+              and "custom" in bk["backup"]["settings"]
+              and bk["name"].startswith("pushraker-backup-")
+              and bk["name"].endswith(".json")
+              and not any(x in text for x in
+                          ("tok123", "pw456", "abc789", "secret_for")), bk)
+        check("backup: read back as settings",
+              pn.cfgmod.backup_settings(json.loads(text)["backup"])
+              == bk["backup"]["settings"])
+        for bad in ({}, {"pushraker_backup": 1}, {"pushraker_backup": 9,
+                                                  "settings": {}}):
+            try:
+                pn.cfgmod.backup_settings(bad)
+                check(f"backup_settings refuses {bad}", False)
+            except pn.cfgmod.ConfigError:
+                pass
+        sent.clear()
+        res = await server.endpoints["/server/pushraker/backup"](
+            WebRequest("POST", {"how": "push"}))
+        check("backup sent by push, as a file",
+              res["sent"] == "ntfy" and sent and sent[0][2]
+              and sent[0][2].endswith(".json")
+              and not os.path.exists(sent[0][2]), (res, sent))
+        sent.clear()
+        res = await server.endpoints["/server/pushraker/backup"](
+            WebRequest("POST", {"how": "email", "to": "other@example.com"}))
+        check("backup by email to the address given, email notifications "
+              "off",
+              res["sent"] == "other@example.com" and sent, (res, sent))
+        targets = pn.cfgmod.backup_targets(
+            dict(saved_s, provider="gotify",
+                 gotify_server="https://g.example.com"))
+        check("backup: Gotify can't send it",
+              targets["push"] == "Gotify can't send files"
+              and targets["email"] == ""
+              and targets["email_to"] == "me@example.com", targets)
+        try:
+            await server.endpoints["/server/pushraker/backup"](
+                WebRequest("POST", {"how": "email", "to": "nope"}))
+            check("backup by email: a bad address is refused", False)
+        except Exception as e:
+            check("backup by email: a bad address is refused",
+                  "email address" in str(e), e)
+        del c.store.changed
     finally:
         pn.apprise.Apprise = real
     try:

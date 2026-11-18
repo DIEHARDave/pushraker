@@ -675,6 +675,32 @@ RESPOND PREFIX=notify MSG="Print ejection failed || Plate still occupied, queue 
 - On a printer without push notifications, or with them off, the line is only
   console output: nothing fails.
 
+## Backup
+
+**Backup ▴** at the bottom of the page puts the saved settings in a file
+(`pushraker-backup-<printer>-<date>.json`): servers, topics, email and
+webhook settings, every notification (on/off, push and email, priority,
+templates) and the custom notifications. Save & Apply first to include
+changes on the page.
+
+- **Download**: to this device.
+- **Send by push**: as a file, by ntfy, Telegram or Discord. Pushover can
+  only send pictures and Gotify no files: greyed out. A self-hosted ntfy
+  server needs attachments turned on (`attachment-cache-dir`).
+- **Send by email**: to the address you enter (the email settings' first
+  address to start with), with the email settings, even with email
+  notifications off.
+
+⚠️ Not in a backup: tokens, passwords and the webhook URL (what
+`pushraker.secrets` holds; a webhook URL usually has a token in it).
+Restoring on another printer, or after a reset, needs them entered again.
+A topic on the public ntfy.sh server is in it: anyone with the file can
+read that topic.
+
+**Restore…** loads a backup file onto the page. ⚠️ All settings are
+replaced by the backup's (excluding tokens, passwords and the webhook URL,
+which stay as they are). Nothing is saved until you click Save & Apply.
+
 ## Requirements
 
 - For images on a **self-hosted ntfy** server, attachments must be enabled

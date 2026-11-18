@@ -86,16 +86,16 @@
     .nt-enable { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--item); border-radius: 6px; margin-bottom: 16px; cursor: pointer; color: #fff; font-weight: 500; }
     .nt-enable.nt-sec { font-weight: 600; margin-bottom: 12px; }
     .nt input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; flex: none; }
+    .bk-wrap { margin-top: 16px; }
     .bk-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .bk-send-wrap { position: relative; }
     .nt-fill-menu.bk-menu { right: auto; min-width: 260px; top: auto; bottom: calc(100% + 4px); z-index: 20; }
     .bk-status { font-size: 13px; color: #8bc34a; }
-    .bk-hint { margin-top: 6px; }
     .bk-file { font-family: monospace; font-size: 13px; color: #ccc; margin: 4px 0 8px; word-break: break-all; }
     .bk-list { margin: 0 0 10px 18px; padding: 0; font-size: 14px; line-height: 1.6; }
     .bk-note { color: var(--muted); font-size: 13px; }
-    .nt-fill-menu.bk-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
-    .nt-fill-menu.bk-menu button:disabled:hover { background: none; }
+    .nt-fill-menu.bk-menu button.bk-off { opacity: 0.45; cursor: not-allowed; }
+    .nt-fill-menu.bk-menu button.bk-off:hover { background: none; }
     .bk-red { color: #ff6b6b; font-weight: 600; }
     .bk-to { margin: 4px 0 8px; }
     .bk-to label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
@@ -634,20 +634,22 @@
             </div>
         </div>
 
-        <div class="nt-section">Backup</div>
-        <div class="bk-row">
-            <span class="nt-fill-wrap bk-send-wrap">
-                <button type="button" class="btn btn-secondary" id="bk-send" aria-haspopup="true" aria-expanded="false">Backup ▴</button>
-                <div class="nt-fill-menu bk-menu" id="bk-menu" role="menu">
-                    <button type="button" role="menuitem" data-bk="download">Download<small>A file on this device</small></button>
-                    <button type="button" role="menuitem" data-bk="push">Send by push: ntfy<small>As a file to your topic</small></button>
-                    <button type="button" role="menuitem" data-bk="email">Send by email<small>To an address you choose</small></button>
-                </div>
-            </span>
-            <button type="button" class="btn btn-secondary" id="bk-restore">Restore…</button>
-            <input type="file" id="bk-file" accept=".json,application/json" style="display:none">
-            <span class="bk-status" id="bk-status"></span>
-        </div>
+    </div>
+    <div class="bk-wrap">
+    <div class="nt-section">Backup</div>
+    <div class="bk-row">
+        <span class="nt-fill-wrap bk-send-wrap">
+            <button type="button" class="btn btn-secondary" id="bk-send" aria-haspopup="true" aria-expanded="false">Backup ▴</button>
+            <div class="nt-fill-menu bk-menu" id="bk-menu" role="menu">
+                <button type="button" role="menuitem" data-bk="download">Download</button>
+                <button type="button" role="menuitem" data-bk="push" id="bk-push">Send by push</button>
+                <button type="button" role="menuitem" data-bk="email" id="bk-email">Send by email</button>
+            </div>
+        </span>
+        <button type="button" class="btn btn-secondary" id="bk-restore">Restore…</button>
+        <input type="file" id="bk-file" accept=".json,application/json" style="display:none">
+        <span class="bk-status" id="bk-status"></span>
+    </div>
     </div>
 </div>
 
@@ -688,18 +690,14 @@
 <div class="pr-modal bk-modal" id="bk-out" role="dialog" aria-labelledby="bk-out-title">
     <div class="pr-modal-box">
         <h3 id="bk-out-title">Back up settings</h3>
-        <div class="bk-file">📄 pushraker-backup-U1-2026-11-18.json</div>
-        <ul class="bk-list">
-            <li>Servers, topics, email and webhook settings</li>
-            <li>23 notifications: on/off, push and email, priority, templates</li>
-            <li>3 custom notifications: benchy_detected, every_fifth, bed_cool</li>
-        </ul>
+        <ul class="bk-list" id="bk-out-list"></ul>
         <p class="bk-red">⚠️ Not included: tokens, passwords, webhook URLs. Restoring this backup on another printer, or after a reset, needs them entered again.</p>
         <p class="bk-note">The last saved settings: Save &amp; Apply first to include changes on this page.</p>
         <div class="bk-to" id="bk-to-wrap">
             <label for="bk-to">Send to</label>
-            <input class="nt-input" id="bk-to" type="email" value="you@example.com" autocomplete="off" spellcheck="false">
+            <input class="nt-input" id="bk-to" type="email" autocomplete="off" spellcheck="false">
         </div>
+        <div class="pr-data-err" id="bk-err" style="display:none"></div>
         <div class="pr-buttons">
             <button type="button" class="btn btn-save" id="bk-go">Download</button>
             <button type="button" class="btn btn-secondary" id="bk-cancel">Cancel</button>
@@ -710,13 +708,8 @@
 <div class="pr-modal bk-modal" id="bk-modal" role="alertdialog" aria-labelledby="bk-title">
     <div class="pr-modal-box">
         <h3 id="bk-title">Restore this backup?</h3>
-        <div class="bk-file">📄 pushraker-backup-U1-2026-11-18.json</div>
-        <ul class="bk-list">
-            <li>From <b>U1</b>, 18 Nov 2026 13:52, pushraker 0.3.6</li>
-            <li>Servers, topics, email and webhook settings</li>
-            <li>23 notifications: on/off, push and email, priority, templates</li>
-            <li>3 custom notifications: benchy_detected, every_fifth, bed_cool</li>
-        </ul>
+        <div class="bk-file" id="bk-in-file"></div>
+        <ul class="bk-list" id="bk-in-list"></ul>
         <p class="bk-red">⚠️ All settings will be replaced by the backup (excluding tokens, passwords, webhook URLs).</p>
         <p class="bk-note">Tokens, passwords and webhook URLs stay as they are here. Nothing is saved until you click Save &amp; Apply.</p>
         <div class="pr-buttons">
@@ -2734,6 +2727,126 @@
 
     el('pr-save').onclick = save;
     el('pr-test').onclick = test;
+
+    // Backup: the saved settings in a file (no tokens, passwords or webhook
+    // URL), downloaded or sent; Restore: a backup's settings onto this page
+    // (the secrets stay as they are), saved with Save & Apply
+    const bkMenu = el('bk-menu');
+    let bkHow = '', bkIn = null;
+    const bkSay = t => { el('bk-status').textContent = t; };
+    const bkContents = st => {
+        const custom = (st.custom || []).map(c => c.name);
+        return '<li>Servers, topics, email and webhook settings</li>' +
+            '<li>Every notification: on/off, push and email, priority, templates</li>' +
+            `<li>${custom.length ? `${custom.length} custom notification${custom.length > 1 ? 's' : ''}: ${esc(custom.join(', '))}` : 'No custom notifications'}</li>`;
+    };
+    function bkShowMenu() {
+        const t = (state && state.meta.backup) || {};
+        const push = el('bk-push'), mail = el('bk-email');
+        push.textContent = 'Send by push' + (t.push_label ? ': ' + t.push_label : '');
+        push.classList.toggle('bk-off', !!t.push);
+        push.title = t.push || '';
+        mail.classList.toggle('bk-off', !!t.email);
+        mail.title = t.email || '';
+    }
+    el('bk-send').onclick = e => {
+        e.stopPropagation();
+        if (!state) return;
+        bkShowMenu();
+        el('bk-send').setAttribute('aria-expanded', String(bkMenu.classList.toggle('open')));
+    };
+    document.addEventListener('click', () => { bkMenu.classList.remove('open'); el('bk-send').setAttribute('aria-expanded', 'false'); });
+    bkMenu.onclick = e => {
+        const b = e.target.closest('[data-bk]');
+        if (!b) return;
+        if (b.classList.contains('bk-off')) { e.stopPropagation(); bkSay('⚠️ ' + b.title); return; }
+        bkHow = b.dataset.bk;
+        const t = state.meta.backup || {};
+        el('bk-out-title').textContent = bkHow === 'download' ? 'Download a backup' :
+            bkHow === 'push' ? `Send a backup by push (${t.push_label})` : 'Send a backup by email';
+        el('bk-out-list').innerHTML = bkContents(state);
+        el('bk-go').textContent = bkHow === 'download' ? 'Download' : 'Send';
+        el('bk-go').disabled = false;
+        el('bk-to-wrap').style.display = bkHow === 'email' ? '' : 'none';
+        el('bk-to').value = t.email_to || '';
+        el('bk-err').style.display = 'none';
+        el('bk-out').classList.add('open');
+        if (bkHow === 'email') el('bk-to').focus();
+    };
+    el('bk-cancel').onclick = () => el('bk-out').classList.remove('open');
+    el('bk-go').onclick = async () => {
+        const go = el('bk-go'), label = go.textContent;
+        el('bk-err').style.display = 'none';
+        go.disabled = true;
+        go.textContent = bkHow === 'download' ? 'Downloading…' : 'Sending…';
+        try {
+            const data = await api('/server/pushraker/backup', 'POST',
+                bkHow === 'email' ? { how: 'email', to: el('bk-to').value.trim() } : { how: bkHow });
+            if (bkHow === 'download') {
+                const url = URL.createObjectURL(new Blob([JSON.stringify(data.backup, null, 2)], { type: 'application/json' }));
+                const a = document.createElement('a');
+                a.href = url; a.download = data.name;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+                bkSay('✓ Downloaded ' + data.name);
+            } else {
+                bkSay('✓ Sent ' + data.name + ' to ' + data.sent);
+            }
+            el('bk-out').classList.remove('open');
+        } catch (e) {
+            el('bk-err').textContent = '⚠️ ' + e.message;
+            el('bk-err').style.display = '';
+        } finally {
+            go.disabled = false;
+            go.textContent = label;
+        }
+    };
+    el('bk-restore').onclick = () => { if (state) { el('bk-file').value = ''; el('bk-file').click(); } };
+    el('bk-file').onchange = async () => {
+        const f = el('bk-file').files[0];
+        if (!f) return;
+        let data;
+        try {
+            if (f.size > 2000000) throw new Error('too big for a backup');
+            data = JSON.parse(await f.text());
+            if (!data || typeof data !== 'object' || !('pushraker_backup' in data)) throw new Error('not a pushraker backup');
+            if (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings)) throw new Error('the backup has no settings');
+            if (Number(data.pushraker_backup) > 1) throw new Error('the backup is from a newer pushraker; update this one first');
+        } catch (e) {
+            bkSay('⚠️ Can\'t restore ' + f.name + ': ' + e.message);
+            return;
+        }
+        bkIn = data;
+        let when = '';
+        try { when = new Date(data.created).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { when = ''; }
+        el('bk-in-file').textContent = '📄 ' + f.name;
+        el('bk-in-list').innerHTML = `<li>From <b>${esc(data.printer || '?')}</b>${when ? ', ' + esc(when) : ''}${data.version ? ', pushraker ' + esc(data.version) : ''}</li>` + bkContents(data.settings);
+        el('bk-modal').classList.add('open');
+    };
+    el('bk-no').onclick = () => { el('bk-modal').classList.remove('open'); bkIn = null; };
+    el('bk-yes').onclick = () => {
+        el('bk-modal').classList.remove('open');
+        if (!bkIn) return;
+        const b = bkIn.settings, keep = saved, merged = Object.assign({}, state, b);
+        // Secrets: the ones stored here (a backup has none); rows and
+        // templates a newer pushraker has that the backup doesn't: as now
+        for (const k of ['secret', 'email_password', 'webhook_url']) { merged[k] = ''; merged['has_' + k] = state['has_' + k]; }
+        delete merged.secret_for; delete merged.email_password_for;
+        merged.rows = Object.assign({}, state.rows, b.rows || {});
+        merged.templates = Object.assign({}, state.templates, b.templates || {});
+        merged.custom = Array.isArray(b.custom) ? b.custom : [];
+        merged.meta = state.meta;
+        bkIn = null;
+        try {
+            render(merged);
+        } catch (e) {
+            bkSay('⚠️ Can\'t restore this backup: ' + e.message);
+            return;
+        }
+        saved = keep;
+        markDirty();
+        bkSay('✓ Restored on this page: check it, then Save & Apply');
+    };
     // Discard changes: back to the last saved settings, on this page.
     // Only with unsaved changes (the button is greyed out otherwise)
     let closing = false;
@@ -2783,30 +2896,6 @@
     load();
 })();
 
-</script>
-<script>
-// MOCKUP: backup buttons
-(() => {
-    const el = id => document.getElementById(id), menu = el('bk-menu');
-    const say = t => { el('bk-status').textContent = t; };
-    let how = '';
-    el('bk-send').onclick = e => { e.stopPropagation(); menu.classList.toggle('open'); };
-    document.addEventListener('click', () => menu.classList.remove('open'));
-    menu.onclick = e => {
-        const b = e.target.closest('[data-bk]'); if (!b || b.disabled) return;
-        how = b.dataset.bk;
-        el('bk-out-title').textContent = how === 'download' ? 'Download a backup' : how === 'push' ? 'Send a backup by push' : 'Send a backup by email';
-        el('bk-go').textContent = how === 'download' ? 'Download' : 'Send';
-        el('bk-to-wrap').style.display = how === 'email' ? '' : 'none';
-        el('bk-out').style.display = 'flex';
-    };
-    el('bk-cancel').onclick = () => { el('bk-out').style.display = ''; };
-    el('bk-go').onclick = () => { el('bk-out').style.display = '';
-        say(how === 'download' ? '✓ Downloaded' : how === 'push' ? '✓ Sent to ntfy' : '✓ Emailed to ' + el('bk-to').value); };
-    el('bk-restore').onclick = () => { el('bk-modal').style.display = 'flex'; };
-    el('bk-no').onclick = () => { el('bk-modal').style.display = ''; };
-    el('bk-yes').onclick = () => { el('bk-modal').style.display = ''; say('✓ Restored: check, then Save & Apply'); };
-})();
 </script>
 </body>
 </html>

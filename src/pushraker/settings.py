@@ -1466,8 +1466,9 @@ def webhook_url(s: Dict[str, Any], rid: str, env: Env) -> str:
     return base + ("&" if own else "?") + "&".join(params)
 
 
-def email_url(s: Dict[str, Any]) -> str:
-    """Apprise URL for email (SMTP)."""
+def email_url(s: Dict[str, Any], inline: bool = True) -> str:
+    """Apprise URL for email (SMTP). inline: the image shown in the HTML
+    card (a backup file goes as a plain attachment)."""
     scheme = "mailto" if s["email_security"] == "none" else "mailtos"
     userinfo = ""
     if s["email_username"]:
@@ -1476,11 +1477,72 @@ def email_url(s: Dict[str, Any]) -> str:
     # HTML card (pushraker.email_html) with the image inline; Apprise adds
     # a plain-text version
     params = {"from": s["email_from"], "to": ",".join(recipients(s)),
-              "name": s["name"], "format": "html", "inline": "yes"}
+              "name": s["name"], "format": "html",
+              "inline": "yes" if inline else "no"}
     if s["email_security"] != "none":
         params["mode"] = s["email_security"]
     return (f"{scheme}://{userinfo}{s['email_host']}:{s['email_port']}"
             f"?{query(params)}")
+
+
+PROVIDER_LABELS = {"ntfy": "ntfy", "gotify": "Gotify", "pushover": "Pushover",
+                   "telegram": "Telegram", "discord": "Discord",
+                   "discord_dm": "Discord"}
+# A backup: the settings in a file, without what pushraker.secrets holds
+BACKUP_FORMAT = 1
+# Push services that can carry a backup file, and why the others can't
+BACKUP_PUSH = {"ntfy": "", "telegram": "", "discord": "", "discord_dm": "",
+               "pushover": "Pushover can only send pictures",
+               "gotify": "Gotify can't send files"}
+
+
+def backup(s: Dict[str, Any], version: str,
+           created: str) -> Dict[str, Any]:
+    """The saved settings as a backup: no tokens, passwords or webhook
+    URL (the secrets), nothing about which service they were for."""
+    out = json.loads(json.dumps(s))
+    for key in SECRET_FIELDS + ("secret_for", "email_password_for"):
+        out.pop(key, None)
+    return {"pushraker_backup": BACKUP_FORMAT, "version": version,
+            "printer": s.get("name") or "Printer", "created": created,
+            "settings": out}
+
+
+def backup_name(s: Dict[str, Any], day: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", s.get("name") or "Printer")
+    return f"pushraker-backup-{name.strip('-') or 'Printer'}-{day}.json"
+
+
+def backup_targets(s: Dict[str, Any]) -> Dict[str, Any]:
+    """Where a backup can be sent with the saved settings, even with
+    notifications off: the push service (or why not), and email."""
+    on = dict(s, enabled=True, push_enabled=True, email_enabled=True)
+    label = PROVIDER_LABELS.get(s["provider"], s["provider"])
+    if not push_configured(on):
+        push = "Set up a push service first"
+    else:
+        push = BACKUP_PUSH.get(s["provider"], "This service can't send files")
+    email = "" if on["email_host"] and on["email_from"] else \
+        "Set up email first"
+    return {"push": push, "push_label": label, "email": email,
+            "email_to": (recipients(s) or [""])[0]}
+
+
+def backup_settings(data: Any) -> Dict[str, Any]:
+    """A backup file's settings, checked enough for the page to load
+    them (Save & Apply validates them as any other)."""
+    if not isinstance(data, dict) or "pushraker_backup" not in data:
+        raise ConfigError("Not a pushraker backup")
+    if not isinstance(data.get("settings"), dict):
+        raise ConfigError("The backup has no settings")
+    try:
+        fmt = int(data["pushraker_backup"])
+    except (TypeError, ValueError):
+        raise ConfigError("Not a pushraker backup")
+    if fmt > BACKUP_FORMAT:
+        raise ConfigError("The backup is from a newer pushraker; "
+                          "update this one first")
+    return data["settings"]
 
 
 def available_rows(env: Env) -> List[str]:
@@ -1807,6 +1869,7 @@ def public_view(s: Dict[str, Any], env: Env, busy: bool,
                       for t in TEMPLATES],
         "title_max": TITLE_MAX, "contents_max": CONTENTS_MAX,
         "custom_default": CUSTOM_DEFAULT, "custom_max": CUSTOM_MAX,
+        "backup": backup_targets(s),
         "priorities": PRIORITIES,
         "providers": PROVIDERS,
         "cameras": {name: {"snapshot": bool(c.get("snapshot")),
