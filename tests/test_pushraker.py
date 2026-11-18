@@ -2423,6 +2423,77 @@ async def test_bed_cooled():
         pn.BED_COOL_POLL = poll
 
 
+async def test_pushraker_values():
+    """pushraker.*: settings and what each notification sent; job.state,
+    job.pause; Print complete says Bed cooled will follow."""
+    print("pushraker.* values")
+    reset_world()
+    log = []
+    ntfy = FakeService(log, "ntfy")
+    server, c = make({}, {"complete": [("ntfy", ntfy, False)],
+                          "bed_cooled": [("ntfy", ntfy, False)],
+                          "paused": [("ntfy", ntfy, False)]})
+    s = pn.cfgmod.defaults("U1")
+    s.update(enabled=True, push_enabled=True, provider="ntfy",
+             server="https://ntfy.sh", topic="u1_test_topic")
+    s["rows"]["bed_cooled"].update(enabled=True, email=False)
+    s["custom"] = pn.cfgmod.clean_custom([
+        {"name": "benchy", "when": "1 == 1", "title": "b", "contents": ""}])
+    c.settings = s
+
+    async def r(text):
+        ctx = await c._template_context([text])
+        return pn.jj.render(text, ctx)
+    check("before anything is sent",
+          await r("{{ pushraker.complete.fired }} {{ pushraker.complete.count }}"
+                  " {{ pushraker.complete.push }} {{ pushraker.complete.email }}"
+                  " {{ pushraker.push.service }} {{ pushraker.enabled }}")
+          == "no 0 yes no ntfy yes")
+    await start_job(server)
+    STATE["print_stats"] = ps("complete")
+    STATE["heater_bed"] = {"temperature": 30.0, "target": 0.0}
+    events = server.handlers["job_state:state_changed"]
+    await events(JobEvent.COMPLETE, {}, STATE["print_stats"])
+    await asyncio.sleep(0.4)
+    done = [e for e in log if "complete" in e["title"].lower()]
+    check("Print complete says Bed cooled follows, by push",
+          done and done[0]["body"].endswith(
+              "\n\nNotification will be sent via push when bed has cooled"),
+          [e["body"] for e in done])
+    out = await r("{{ pushraker.complete.fired }}|{{ pushraker.complete.count }}"
+                  "|{{ pushraker.complete.fired.ago < 5 }}"
+                  "|{{ pushraker.complete.fired.time.date }}"
+                  "|{{ pushraker.complete.failed }}"
+                  "|{{ pushraker.complete.failed.count }}"
+                  "|{{ pushraker.last }}|{{ pushraker.failed.count }}")
+    check("after Print complete: fired, when, count, not failed; the last",
+          out.startswith("yes|1|yes|20") and out.endswith("|no|0|complete|0"),
+          out)
+    check("a custom one by its name, its When",
+          await r("{{ pushraker.benchy.when }}|{{ pushraker.benchy.fired }}"
+                  "|{{ pushraker.benchy.evaluate }}")
+          == "1 == 1|no|poll")
+    c._custom_state["benchy"] = True
+    check("...and its state", await r("{{ pushraker.benchy.when.state }}")
+          == "yes")
+    await c._on_status_update({"print_stats": {"state": "complete"}}, 0)
+    js = await r("{{ job.state }}")
+    check("job.state: Klipper's", js == "complete", js)
+    c._pause_now = {"planned": True, "number": 1, "layer": 12}
+    check("job.pause", await r("{{ job.pause.planned }} {{ job.pause.layer }}")
+          == "yes 12")
+    c._pause_now = None
+    check("job.pause: nothing when not paused",
+          await r("{{ job.pause.planned|default('none') }}") == "none")
+    try:
+        pn.cfgmod.clean_custom([{"name": "bed_cooled"}], strict=True)
+        check("a custom name pushraker uses is refused", False)
+    except pn.cfgmod.ConfigError as e:
+        check("a custom name pushraker uses is refused", "taken" in str(e))
+    s["rows"]["bed_cooled"].update(enabled=False, email=False)
+    check("Bed cooled off: no line", c._bed_cooled_via() == "")
+
+
 async def test_print_by_object():
     print("Print by object: layer and object notifications")
     reset_world()
@@ -4018,7 +4089,7 @@ async def run_component_tests():
               test_fault_dedup, test_same_preparation_everywhere,
               test_email_threads, test_filament_measured, test_filament_alerts,
               test_faults_over_a_job, test_spool_switch, test_ace, test_file_pauses, test_file_mode, test_generic_printer, test_status_report, test_time_left, test_calibration, test_gotify, test_image_names, test_fault_emoji, test_send_gap, test_macro_notify, test_render_thread, test_job_moments, test_current_extruder, test_macro_topic, test_template_limits, test_now_values, test_queue_line, test_chamber, test_filament_change, test_backup_order, test_console,
-              test_driver_hot, test_bed_cooled,
+              test_driver_hot, test_bed_cooled, test_pushraker_values,
               test_print_by_object,
               test_no_secrets_in_logs, test_config_lines, test_old_names, test_preprint,
               test_two_fixes, test_more_notifications, test_template_variants, test_templates_sending, test_custom_notifications, test_custom_events, test_camera_pictures, test_codemirror,

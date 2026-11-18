@@ -612,6 +612,9 @@ CUSTOM_SAMPLES: Dict[str, Dict[str, Any]] = {
     "progress": {"progress": 50},
     "console": {"message": "Probe triggered at z=0.012"},
 }
+# job.pause in the preview: a pause planned in the file
+SAMPLE_PAUSE = {"planned": True, "number": 1, "layer": 42,
+                "kind": "filament change", "message": "Change to red"}
 SAMPLE_EXTRA: Dict[str, Dict[str, Any]] = {
     "paused": {"planned": True, "pause": {
         "number": 1, "layer": 42, "kind": "filament change",
@@ -635,7 +638,7 @@ PARITY_LOG: List[Tuple[str, str, str, str]] = []
 JOB_BRANCHES = [re.compile(p) for p in (
     r"time", r"time\.remaining", r"filaments", r"filament\d+",
     r"queue", r"queue\.next", r"queue\.(?:job)?\d+", r"extruders",
-    r"pauses", r"pause\d+", r"objects")]
+    r"pauses", r"pause\d+", r"pause", r"objects")]
 
 # job.* values: while a print job runs or is paused, and this long after it
 # ends, for the notifications sent just after it
@@ -1079,6 +1082,16 @@ class PushNotifications:
         self._ev_pct = 0
         self._ev_tool = ""
         self._ev_excluded: Set[str] = set()
+        # pushraker.*: what each notification sent since pushraker started
+        # (by its row: at, count, job, job_count, failed, failed_count),
+        # the last one sent, and when pushraker started
+        self._sent: Dict[str, Dict[str, Any]] = {}
+        self._sent_last: Optional[str] = None
+        self._boot_at = time.time()
+        # A custom notification's When as last evaluated
+        self._custom_state: Dict[str, bool] = {}
+        # job.pause: the pause now (planned in the file or not)
+        self._pause_now: Optional[Dict[str, Any]] = None
         self._filament_job = 0      # bumped per job; stops an old watcher
         # Print jobs started: "once per print job" (the time after a print
         # job ends still counts as that job)
@@ -1726,7 +1739,8 @@ class PushNotifications:
                 "extruders": self._extruders_view(resolve, state, sample,
                                                   current),
                 "event": ev,
-                "machine": self._machine()}
+                "machine": self._machine(),
+                "pushraker": self._pushraker_view()}
 
     # event.time: when the notification was set off, in its time zone;
     # {{ event.time }} is the clock time, its parts are fields
@@ -1748,9 +1762,9 @@ class PushNotifications:
                 "timezone": str(tz) if tz else None,
                 "timestamp": int(when)}
 
-    def _time_view(self, when: float) -> jj.View:
-        """event.time at `when`, read when the template reads it, so
-        {% set timezone %} applies."""
+    def _time_view(self, when: float, name: str = "event.time") -> jj.View:
+        """event.time (or another time) at `when`, read when the template
+        reads it, so {% set timezone %} applies."""
         def look(path: List[str]) -> Any:
             if path == ["time"]:
                 return self._time_values(when)["clock"]
@@ -1758,12 +1772,20 @@ class PushNotifications:
                 return self._time_values(when)[path[1]]
             return None
         return jj.View(look, lambda p: p == ["time"], lambda p: None,
-                       ["time"], "event.time")
+                       ["time"], name)
 
     def _job_view(self, resolve: Any, sample: bool) -> jj.View:
         def look(path: List[str]) -> Any:
             if not path:
                 return None
+            # job.state: Klipper's (printing, paused, complete...); job.pause:
+            # the pause now, planned in the file or not
+            if path == ["state"]:
+                return "printing" if sample else \
+                    self._ps_state() or None
+            if path[0] == "pause" and len(path) == 2:
+                p = SAMPLE_PAUSE if sample else self._pause_now
+                return (p or {}).get(path[1])
             return resolve(tp.Token("", tp.JOB, self._job_path(path), ""))
 
         def branch(path: List[str]) -> bool:
@@ -2619,10 +2641,91 @@ class PushNotifications:
                                 "7 Sunday; timestamp: Unix seconds.",
                                 "formats": tp.format_options(tv["clock"]),
                                 "children": parts}]})
+        cats.insert(len(cats) - 1, {
+            "id": "pushraker", "label": "📣 pushraker",
+            "info": "pushraker's settings, and what each notification sent "
+            "since pushraker started (Moonraker restarting resets them).",
+            "guide": "pushraker-values", "children": self._pushraker_tree()})
         cats.insert(len(cats) - 1, {"id": "machine", "label": "🖥️ Machine",
                      "children": self._value_tree(
                          "machine", jj.prune(self._machine()))})
         return {"categories": [c for c in cats if c["children"]]}
+
+    def _pushraker_tree(self) -> List[Dict[str, Any]]:
+        """pushraker.* for the Objects pane."""
+        def leaf(expr: str, hint: str = "", info: str = "",
+                 kids: Optional[List[Dict[str, Any]]] = None
+                 ) -> Dict[str, Any]:
+            out: Dict[str, Any] = {"name": expr.rsplit(".", 1)[-1],
+                                   "expr": expr}
+            if hint:
+                out["hint"] = hint
+            if info:
+                out["info"] = info
+            if kids:
+                out["children"] = kids
+            return out
+
+        def fired(p: str) -> List[Dict[str, Any]]:
+            return [
+                leaf(f"{p}.fired", "yes / no", "Sent since pushraker "
+                     "started.", [
+                         leaf(f"{p}.fired.time", "🕐 when",
+                              "The last time it was sent; .hour, .date… "
+                              "as in event.time."),
+                         leaf(f"{p}.fired.ago", "seconds since")]),
+                leaf(f"{p}.count", "times sent"),
+                leaf(f"{p}.failed", "yes / no",
+                     "The last one didn't get through.", [
+                         leaf(f"{p}.failed.count", "times it didn't")])]
+
+        def one(p: str, hint: str, custom: bool = False
+                ) -> Dict[str, Any]:
+            kids = [leaf(f"{p}.enabled", "push or email on"),
+                    leaf(f"{p}.push", "yes / no"),
+                    leaf(f"{p}.email", "yes / no"),
+                    leaf(f"{p}.priority"),
+                    leaf(f"{p}.image", "render, camera, graphic, none"),
+                    leaf(f"{p}.camera")] + fired(p) + [
+                leaf(f"{p}.job_count", "times sent this print job")]
+            if custom:
+                kids += [leaf(f"{p}.when", "the condition", "", [
+                    leaf(f"{p}.when.state", "yes / no",
+                         "True or False when last evaluated.")]),
+                    leaf(f"{p}.evaluate", "poll, layer, tool…")]
+            return leaf(p, hint, "", kids)
+
+        s = self.settings or {}
+        labels = {r[0]: r[1] for r in cfgmod.ROWS}
+        rows = [one(f"pushraker.{r}", labels.get(r, ""))
+                for r in s.get("rows") or {}]
+        custom = [one(f"pushraker.{c['name']}", "custom", True)
+                  for c in s.get("custom") or []]
+        return [
+            leaf("pushraker.enabled", "yes / no", "The main switch."),
+            leaf("pushraker.version"),
+            leaf("pushraker.started", "🕐 when it started", "", [
+                leaf("pushraker.started.ago", "seconds since")]),
+            leaf("pushraker.push", "", "", [
+                leaf("pushraker.push.enabled", "yes / no"),
+                leaf("pushraker.push.service", "ntfy, Telegram…"),
+                leaf("pushraker.push.server"),
+                leaf("pushraker.push.topic")]),
+            leaf("pushraker.email", "", "", [
+                leaf("pushraker.email.enabled", "yes / no"),
+                leaf("pushraker.email.to", "addresses")]),
+            leaf("pushraker.last", "the last notification sent",
+                 "Its name, and the same as any notification's: "
+                 ".fired.time, .fired.ago, .failed…",
+                 [leaf("pushraker.last.fired.ago", "seconds since")]),
+            leaf("pushraker.failed", "yes / no",
+                 "The last notification sent didn't get through.", [
+                     leaf("pushraker.failed.count",
+                          "all that didn't")]),
+            {"name": "notifications", "hint": "by name",
+             "children": rows},
+        ] + ([{"name": "custom notifications", "hint": "by name",
+               "children": custom}] if custom else [])
 
     def _value_tree(self, prefix: str, value: Dict[str, Any]
                     ) -> List[Dict[str, Any]]:
@@ -2824,6 +2927,18 @@ class PushNotifications:
                   leaf("pause#.kind")]),
             leaf("preprint", info="Pre-print calibrations chosen "
                  "(Snapmaker U1)."),
+            n("state", hint="printing, paused…", token="job.state",
+              info="Klipper's: standby, printing, paused, complete, "
+              "cancelled, error."),
+            n("pause", hint="the pause now", info="While paused.",
+              children=[
+                  n("planned", token="job.pause.planned", hint="yes / no",
+                    info="Written into the file (M600, PAUSE, M601…)."),
+                  n("number", token="job.pause.number",
+                    info="Planned: which of the file's pauses."),
+                  n("layer", token="job.pause.layer"),
+                  n("kind", token="job.pause.kind"),
+                  n("message", token="job.pause.message")]),
         ]
 
     async def _ep_preview(self, web_request: Any) -> Dict[str, Any]:
@@ -3459,6 +3574,7 @@ class PushNotifications:
                 results = self._outcomes(rid, dests, await asyncio.gather(*(
                     self._deliver(rid, d, t, [(title, body, named)], report)
                     for d, t in zip(dests, tickets)), return_exceptions=True))
+                self._mark_sent(rid, event["_at"], all(results))
                 self._console_report(report)
             finally:
                 if named is not None and named != path:
@@ -4195,6 +4311,7 @@ class PushNotifications:
             # queues, so filament warnings always arrive after it
             self._start_filament_watch(filename, progress, check_start=True)
         elif job_event == JobEvent.PAUSED:
+            self._spawn(self._note_pause())
             if ex is not None and "error" in self.rows and \
                     self._refill_expected(ex):
                 self._mark_fault(fault_key(ex))
@@ -4214,6 +4331,7 @@ class PushNotifications:
                     "paused", self._title("paused"), shown(filename),
                     delay=PAUSE_SNAPSHOT_DELAY, event={"planned": False}))
         elif job_event == JobEvent.RESUMED:
+            self._pause_now = None
             self._driver_hot_sent = False   # a hot driver may warn again
             self._resumes += 1
             if ex is not None:
@@ -4260,6 +4378,7 @@ class PushNotifications:
                     "complete" if job_event == JobEvent.COMPLETE
                     else "cancelled", ps))
         if job_event.finished:
+            self._pause_now = None
             self._job_active = False
             self._job_ended = time.monotonic()
             self._job_gen += 1
@@ -4278,6 +4397,7 @@ class PushNotifications:
         self._job_active = False
         self._job_done_sent = False
         self._job_number += 1
+        self._pause_now = None
         if query:
             state = await self._query(
                 {"print_stats": ["info"], "virtual_sdcard": ["file_position"],
@@ -4373,6 +4493,10 @@ class PushNotifications:
                 "Print time: "
                 f"{format_duration(ps.get('print_duration', 0))}",
                 self._queue_line(filename, starting=False))
+            via = self._bed_cooled_via()
+            if via:
+                body += f"\n\nNotification will be sent via {via} when " \
+                    "bed has cooled"
             event: Dict[str, Any] = {}
         elif ex is not None and fault_reported:
             rid, title = "cancelled", self._title("cancelled")
@@ -4405,6 +4529,16 @@ class PushNotifications:
             else None
         await self._send(rid, title, body, snapshot=snapshot,
                          snapshot_ready=True, event=event)
+
+    def _bed_cooled_via(self) -> str:
+        """How Bed cooled will be sent (push & email, push, email), for
+        Print complete to say; empty when it won't be."""
+        v = self._pushraker_values()
+        bed = v.get("bed_cooled") or {}
+        push = bed.get("push") and v["push"]["enabled"]
+        email = bed.get("email") and v["email"]["enabled"]
+        return " & ".join(m for m, on in (("push", push), ("email", email))
+                          if on)
 
     async def _watch_bed(self, ended: str, filename: str) -> None:
         """Bed cooled: after a print ends (complete, cancelled or failed), once
@@ -4651,8 +4785,155 @@ class PushNotifications:
             # true when pushraker starts isn't news
             was = self._custom_was.get(name)
             self._custom_was[name] = now
+            self._custom_state[name] = bool(now)
             if now and was is False and self._custom_due(c):
                 self._spawn(self._send_custom(c, "condition"))
+
+    def _mark_sent(self, rid: str, at: float, ok: bool) -> None:
+        """pushraker.*: a notification was sent (ok: it got through to
+        every destination)."""
+        row = "macro" if rid.startswith("macro_") else rid
+        st = self._sent.setdefault(row, {"count": 0, "failed_count": 0})
+        if st.get("job") != self._job_number:
+            st["job"], st["job_count"] = self._job_number, 0
+        st["at"] = at
+        st["count"] += 1
+        st["job_count"] += 1
+        st["failed"] = not ok
+        st["failed_count"] += 0 if ok else 1
+        self._sent_last = row
+
+    async def _note_pause(self) -> None:
+        """job.pause: whether this pause was written into the file."""
+        try:
+            state = await self._query({"virtual_sdcard": ["file_position"]})
+        except Exception:
+            state = {}
+        pos = (state.get("virtual_sdcard") or {}).get("file_position")
+        i = self._file_pause(pos) if self._job_pauses else None
+        if i is None:
+            self._pause_now = {"planned": False}
+            return
+        p = self._job_pauses[i]
+        self._pause_now = {"planned": True, "number": i + 1,
+                           "layer": p["layer"] or None,
+                           "kind": p["kind"] or "pause",
+                           "message": p["message"] or None}
+
+    def _pushraker_values(self, sample: bool = False) -> Dict[str, Any]:
+        """pushraker.*: its settings and what each notification sent since
+        it started. A dict's "" is the value of the name itself (fired is
+        yes/no and has .time and .ago)."""
+        s = self.settings or {}
+        now = time.time()
+        rows = s.get("rows") or {}
+
+        def stats(row: str) -> Dict[str, Any]:
+            if sample and row == "complete":
+                return {"at": now - 600, "count": 1, "job": self._job_number,
+                        "job_count": 1, "failed": False, "failed_count": 0}
+            return self._sent.get(row) or {}
+
+        def sent(st: Dict[str, Any], name: str) -> Dict[str, Any]:
+            at = st.get("at")
+            return {
+                "fired": {"": bool(at),
+                          "time": self._time_view(at, f"{name}.fired.time")
+                          if at else None,
+                          "ago": int(now - at) if at else None},
+                "count": st.get("count", 0),
+                "job_count": st.get("job_count", 0)
+                if st.get("job") == self._job_number else 0,
+                "failed": {"": bool(st.get("failed")),
+                           "count": st.get("failed_count", 0)}}
+
+        def settings(r: Dict[str, Any], tpl: Dict[str, Any]
+                     ) -> Dict[str, Any]:
+            push, email = bool(r.get("enabled")), bool(r.get("email"))
+            return {"enabled": push or email, "push": push, "email": email,
+                    "priority": r.get("priority") or "default",
+                    "image": tpl.get("image") or None,
+                    "camera": tpl.get("camera") or None}
+
+        out: Dict[str, Any] = {}
+        for row in rows:
+            key = row if row in cfgmod.TEMPLATE else next(
+                (k for k, t in cfgmod.TEMPLATE.items() if t[1] == row), None)
+            tpl = cfgmod.template(s, key) if key else {}
+            out[row] = dict(settings(rows[row], tpl),
+                            **sent(stats(row), f"pushraker.{row}"))
+        custom: Dict[str, Any] = {}
+        for c in s.get("custom") or []:
+            rid = cfgmod.custom_rid(c["name"])
+            name = f"pushraker.{c['name']}"
+            custom[c["name"]] = dict(
+                settings(c, c), **sent(stats(rid), name),
+                when={"": c.get("when") or None,
+                      "state": self._custom_state.get(c["name"])},
+                evaluate=c.get("evaluate") or "poll")
+        last = self._sent_last
+        last_st = self._sent.get(last or "") or {}
+        on = bool(s.get("enabled"))
+
+        def safe(f: Callable[[Dict[str, Any]], Any], default: Any) -> Any:
+            # Settings not (yet) whole: as if not set up
+            try:
+                return f(s)
+            except (KeyError, TypeError):
+                return default
+        out.update({
+            "enabled": on,
+            "version": __version__,
+            "started": {"": self._time_values(self._boot_at)["clock"],
+                        "ago": int(now - self._boot_at)},
+            "push": {"enabled": on and bool(s.get("push_enabled"))
+                     and safe(cfgmod.push_configured, False),
+                     "service": cfgmod.PROVIDER_LABELS.get(
+                         s.get("provider") or "") or None,
+                     "server": s.get("server") or None,
+                     "topic": s.get("topic") or None},
+            "email": {"enabled": on and safe(cfgmod.email_configured,
+                                             False),
+                      "to": safe(cfgmod.recipients, [])},
+            "last": dict({"": last[len("custom_"):]
+                          if last and last.startswith("custom_") else last,
+                          "name": last}, **sent(last_st, "pushraker.last"))
+            if last else None,
+            "failed": {"": bool(last_st.get("failed")),
+                       "count": sum(v.get("failed_count", 0)
+                                    for v in self._sent.values())}})
+        # Custom ones by their name (pushraker.benchy_detected, as in
+        # G-code); a built-in one keeps a name both have
+        for name, v in custom.items():
+            out.setdefault(name, v)
+        return out
+
+    def _pushraker_view(self, sample: bool = False) -> jj.View:
+        """pushraker.* for a template: read when the template reads it."""
+        values: Optional[Dict[str, Any]] = None
+
+        def node(path: List[str]) -> Any:
+            nonlocal values
+            if values is None:
+                values = self._pushraker_values(sample)
+            cur: Any = values
+            for p in path:
+                if not isinstance(cur, dict) or p == "":
+                    return None
+                cur = cur.get(p)
+            return cur
+
+        def look(path: List[str]) -> Any:
+            v = node(path)
+            return v.get("") if isinstance(v, dict) else v
+
+        def branch(path: List[str]) -> bool:
+            return isinstance(node(path), dict)
+
+        def items(path: List[str]) -> Optional[list]:
+            v = node(path)
+            return v if isinstance(v, list) else None
+        return jj.View(look, branch, items, [], "pushraker")
 
     def _ps_state(self) -> str:
         return str(self._status["print_stats"].get("state") or "")
@@ -4726,6 +5007,7 @@ class PushNotifications:
                         self._custom_err[name] = str(e)
                     continue
                 self._custom_err.pop(name, None)
+                self._custom_state[name] = true
                 if not true:
                     continue
             if not self._custom_due(c):

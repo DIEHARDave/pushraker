@@ -434,6 +434,10 @@ CUSTOM_SECTION = "pushraker custom "
 # the built-in ones
 CUSTOM_MAX = 20
 RX_CUSTOM_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,31}")
+# pushraker.<name> in templates: a built-in notification's or pushraker's
+# own, so not a custom notification's name
+PUSHRAKER_NAMES = ("enabled", "version", "started", "push", "email", "last",
+                   "failed")
 CUSTOM_IMAGES = ("none", "render", "camera")
 CUSTOM_REPEATS = ("change", "job", "job_pause", "minutes")
 # When the condition is evaluated: every few seconds (poll), or at each
@@ -487,6 +491,11 @@ def clean_custom(items: Any, strict: bool = False) -> List[Dict[str, Any]]:
             if name.lower() in seen:
                 raise ConfigError(f'Two custom notifications are named '
                                   f'"{name}"')
+            if strict and name.lower() in {r[0] for r in ROWS} | set(
+                    PUSHRAKER_NAMES):
+                raise ConfigError(
+                    f'Custom notification "{name}": pushraker.{name} is '
+                    "taken by pushraker; choose another name")
             c["name"] = name
             c["enabled"] = bool(raw.get("enabled", c["enabled"]))
             c["email"] = bool(raw.get("email", c["email"]))

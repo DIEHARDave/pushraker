@@ -225,6 +225,8 @@
     .pr-prefixed .pr-prefix { padding: 9px 0 9px 10px; color: var(--muted); font-family: monospace; font-size: 13px; user-select: none; }
     .pr-prefixed input { flex: 1; min-width: 0; border: none; background: transparent; padding: 9px 10px 9px 0; color: var(--text); font-size: 13px; font-family: monospace; }
     .pr-prefixed input:focus { outline: none; }
+    .pr-prefixed.pr-fixed { opacity: 0.6; cursor: default; }
+    .pr-prefixed.pr-fixed input { cursor: default; }
     #pr-cm-when .cm-editor { border: 1px solid #555; border-radius: 6px; font-size: 13px; margin-bottom: 4px; max-height: 160px; }
     #pr-cm-when .cm-scroller { overflow: auto; font-family: monospace; }
     .cm-placeholder { color: var(--muted) !important; font-style: italic; }
@@ -725,9 +727,9 @@
         <div class="pr-data-grid">
             <div class="pr-col-l">
             <div class="pr-ed">
+                <div class="pr-lbl">Name <button type="button" class="nt-i pr-info" id="pr-name-i" data-info="" data-guide="pushraker-values" aria-label="About">?</button></div>
+                <label class="pr-prefixed" id="pr-cname-wrap"><span class="pr-prefix">pushraker.</span><input id="pr-cname" spellcheck="false" autocomplete="off" maxlength="32" placeholder="benchy_detected" aria-label="Name"></label>
                 <div class="pr-custom" id="pr-custom" style="display:none">
-                    <div class="pr-lbl">Name</div>
-                    <label class="pr-prefixed" id="pr-cname-wrap"><span class="pr-prefix">pushraker.</span><input id="pr-cname" spellcheck="false" autocomplete="off" maxlength="32" placeholder="benchy_detected" aria-label="Name"></label>
                     <div class="pr-lbl pr-whenlbl">When (evaluate&nbsp;<select id="pr-check"><option value="poll">every 5 seconds</option><option value="layer">on each layer change</option><option value="tool">on each tool change</option><option value="object">on each object change</option><option value="excluded">when an object is excluded</option><option value="progress">on each 1% of progress</option><option value="console">on each console message</option></select>) <button type="button" class="nt-i pr-info" id="pr-when-i" data-info="A condition, evaluated every 5 seconds: sent when it turns true. Empty: sent only from G-code." data-guide="custom-notifications" aria-label="About">?</button></div>
                     <textarea class="nt-input" id="pr-when" rows="2" spellcheck="false" autocomplete="off"></textarea>
                     <div id="pr-cm-when"></div>
@@ -1645,6 +1647,15 @@
         touched = new Set();
         setPlaceholders(custom);
         el('pr-block-pop').style.display = 'none';
+        // Name: a custom notification's to choose; a built-in one's fixed
+        // (its id: pushraker.complete, and in G-code for a custom one)
+        const meta = custom ? null : tplMeta(editing.key);
+        el('pr-cname').readOnly = !custom;
+        el('pr-cname-wrap').classList.toggle('pr-fixed', !custom);
+        el('pr-name-i').dataset.info = custom
+            ? 'Up to 32 letters, digits and _, starting with a letter. The same name in G-code (RESPOND PREFIX=notify_custom MSG="pushraker.<name>") and in templates (pushraker.<name>.fired, .count…).'
+            : `Its name in templates: pushraker.${meta ? meta.row : editing.key}.enabled, .fired, .count… Not editable.`;
+        if (!custom) el('pr-cname').value = meta ? meta.row : editing.key;
         if (custom) {
             el('pr-cname').value = editing.name;
             el('pr-when').value = editing.when;
