@@ -3038,7 +3038,7 @@ async def test_custom_notifications():
     await server.handlers["server:klippy_ready"]()
     cust = pn.cfgmod.clean_custom([{
         "name": "bed_cool", "when": "printer.heater_bed.temperature < 40",
-        "title": "🧊 {{ machine.name }} {{ event.name }}",
+        "title": "🛏️ {{ machine.name }} {{ event.name }}",
         "contents": "Bed {{ printer.heater_bed.temperature|round|int }}°C"
                     "{% if event.trigger == 'gcode' %} (asked){% endif %}"}])
     c.settings = dict(c.settings or pn.cfgmod.defaults("U1"), custom=cust)
@@ -3053,7 +3053,7 @@ async def test_custom_notifications():
     await asyncio.sleep(0.3)
     check("sent when it turns true, from its template",
           [(e["title"], e["body"]) for e in log]
-          == [("🧊 U1 bed_cool", "Bed 35°C")], log)
+          == [("🛏️ U1 bed_cool", "Bed 35°C")], log)
     log.clear()
     STATE["heater_bed"]["temperature"] = 60.
     await c._custom_check()

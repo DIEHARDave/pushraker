@@ -206,7 +206,7 @@ TITLES = {
     "shutdown": "🛑 {name} Error: shutdown",
     "power_loss": "🔌 {name} power loss",
     "driver_hot": "🌡️ {name} driver running hot",
-    "bed_cooled": "🧊 {name} bed cooled to {limit} °C",
+    "bed_cooled": "🛏️ {name} bed cooled to {limit} °C",
     "filament_loaded": "🧵 {name} filament loaded",
     "filament_unloaded": "🧵 {name} filament unloaded",
     "filament_short": "🧵 {name} not enough filament",

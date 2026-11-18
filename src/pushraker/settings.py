@@ -72,7 +72,7 @@ ROWS = [
      "print", False),
     # After a print ends (complete, cancelled or failed), once the bed is below
     # bed_cool_temp: the print can come off
-    ("bed_cooled", "Bed cooled", "🧊", True, "default", "snapshot", "print",
+    ("bed_cooled", "Bed cooled", "🛏️", True, "default", "snapshot", "print",
      False),
     ("macro", "From macros and G-code", "📣", True, "default", "snapshot",
      "print", False),
