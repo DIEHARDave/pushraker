@@ -930,17 +930,17 @@
                     `<option value="${v}"${v === byObject[1] ? ' selected' : ''}>${t}</option>`).join('')}</select><span class="nt-needs" data-needs="${byObject[0]}"${byObject[1] === 'each' ? '' : ' style="display:none"'}>. Needs <b>Exclude objects</b> enabled in the slicer</span></span>`
                 : '';
             const driver = meta.id === 'driver_hot'
-                ? `<span class="nt-sub">X or Y driver over <input class="nt-input nt-layer nt-deg" id="nt-driver-hot" type="number" min="40" max="150" inputmode="numeric" value="${state.driver_temp}"> °C</span>`
+                ? `<span class="nt-sub">X or Y driver over <input class="nt-input nt-layer nt-deg" id="nt-driver-hot" type="number" min="40" max="150" inputmode="numeric" value="${esc(state.driver_temp)}"> °C</span>`
                 : '';
             const bed = meta.id === 'bed_cooled'
-                ? `<span class="nt-sub">After a print ends, bed below <input class="nt-input nt-layer nt-deg" id="nt-bed-cool" type="number" min="20" max="100" inputmode="numeric" value="${state.bed_cool_temp}"> °C</span>`
+                ? `<span class="nt-sub">After a print ends, bed below <input class="nt-input nt-layer nt-deg" id="nt-bed-cool" type="number" min="20" max="100" inputmode="numeric" value="${esc(state.bed_cool_temp)}"> °C</span>`
                 : '';
             const marks = meta.id === 'progress'
                 ? `<span class="nt-sub">${(state.meta.progress_marks || [25, 50, 75]).map(m =>
                     `<label style="margin-right:12px; white-space:nowrap"><input type="checkbox" id="nt-pm-${m}"${progressMarks().includes(m) ? ' checked' : ''}> ${m}%</label>`).join('')}</span>`
                 : '';
             const report = meta.id === 'status_report'
-                ? `<span class="nt-sub">Every <input class="nt-input nt-layer nt-deg" id="nt-report-interval" type="number" min="5" max="720" inputmode="numeric" value="${state.report_interval}"> minutes of print time (a pause stops the clock)</span>`
+                ? `<span class="nt-sub">Every <input class="nt-input nt-layer nt-deg" id="nt-report-interval" type="number" min="5" max="720" inputmode="numeric" value="${esc(state.report_interval)}"> minutes of print time (a pause stops the clock)</span>`
                 : '';
             const calib = meta.id === 'calibration'
                 ? '<span class="nt-sub">Notifies when complete, failed or requires user intervention</span>'
@@ -2839,23 +2839,18 @@
         el('bk-modal').classList.add('open');
     };
     el('bk-no').onclick = () => { el('bk-modal').classList.remove('open'); bkIn = null; };
-    el('bk-yes').onclick = () => {
+    el('bk-yes').onclick = async () => {
         el('bk-modal').classList.remove('open');
         if (!bkIn) return;
-        const b = bkIn.settings, keep = saved, merged = Object.assign({}, state, b);
-        // Secrets: the ones stored here (a backup has none); rows and
-        // templates a newer pushraker has that the backup doesn't: as now
-        for (const k of ['secret', 'email_password', 'webhook_url']) { merged[k] = ''; merged['has_' + k] = state['has_' + k]; }
-        delete merged.secret_for; delete merged.email_password_for;
-        merged.rows = Object.assign({}, state.rows, b.rows || {});
-        merged.templates = Object.assign({}, state.templates, b.templates || {});
-        merged.custom = Array.isArray(b.custom) ? b.custom : [];
-        merged.meta = state.meta;
+        const data = bkIn, keep = saved;
         bkIn = null;
         try {
-            render(merged);
+            // Checked by pushraker like a save: nothing from a file gets
+            // onto the page as it came; the secrets stay the ones here
+            const res = await api('/server/pushraker/backup', 'POST', { how: 'restore', backup: data });
+            render(res.view);
         } catch (e) {
-            bkSay('⚠️ Can\'t restore this backup: ' + e.message);
+            bkSay('⚠️ ' + (/^Can't restore/.test(e.message) ? e.message : 'Can\'t restore this backup: ' + e.message));
             return;
         }
         saved = keep;

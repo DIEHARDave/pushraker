@@ -1434,6 +1434,25 @@ async def test_file_mode():
                 check(f"backup_settings refuses {bad}", False)
             except pn.cfgmod.ConfigError:
                 pass
+        back = await server.endpoints["/server/pushraker/backup"](
+            WebRequest("POST", {"how": "restore", "backup": bk["backup"]}))
+        check("restore: the backup's settings, checked, for the page; the "
+              "secrets' marks are this printer's",
+              back["view"]["topic"] == saved_s["topic"]
+              and "has_secret" in back["view"]
+              and not any(x in json.dumps(back["view"]) for x in
+                          ("tok123", "pw456", "abc789"))
+              and "meta" in back["view"], back["view"].get("topic"))
+        evil = json.loads(json.dumps(bk["backup"]))
+        evil["settings"]["bed_cool_temp"] = '"><img src=x onerror=alert(1)>'
+        try:
+            await server.endpoints["/server/pushraker/backup"](
+                WebRequest("POST", {"how": "restore", "backup": evil}))
+            check("restore: a file with a value that isn't one is refused",
+                  False)
+        except Exception as e:
+            check("restore: a file with a value that isn't one is refused",
+                  "Can't restore" in str(e), e)
         sent.clear()
         res = await server.endpoints["/server/pushraker/backup"](
             WebRequest("POST", {"how": "push"}))
@@ -2492,6 +2511,12 @@ async def test_pushraker_values():
         check("a custom name pushraker uses is refused", "taken" in str(e))
     s["rows"]["bed_cooled"].update(enabled=False, email=False)
     check("Bed cooled off: no line", c._bed_cooled_via() == "")
+    c._mark_sent("progress_25", time.time(), False)
+    c._mark_sent("custom_benchy", time.time(), True)
+    check("progress_25 counts as Progress; a failed one; the last by name",
+          await r("{{ pushraker.progress.count }} {{ pushraker.progress.failed }}"
+                  " {{ pushraker.failed.count }} {{ pushraker.last }}"
+                  " {{ pushraker.benchy.fired }}") == "1 yes 1 benchy yes")
 
 
 async def test_print_by_object():
@@ -3329,6 +3354,25 @@ async def test_custom_events():
           == ["console: // Probe triggered at z=0.012"],
           [e["title"] for e in log])
     log.clear()
+    # pushraker's own console lines aren't console messages to evaluate at
+    c._custom_sent["probe"] -= 20
+    c._console("Probe: pushraker's own line")
+    c._on_gcode_response("Probe: pushraker's own line")
+    await asyncio.sleep(0.2)
+    check("pushraker's own console lines don't count", not log,
+          [e["title"] for e in log])
+    c._on_gcode_response("Probe: someone else's line")
+    await asyncio.sleep(0.2)
+    check("...the same line from elsewhere does", len(log) == 1,
+          [e["title"] for e in log])
+    log.clear()
+    c._ev_busy = pn.CUSTOM_EVENT_PENDING
+    c._custom_sent["probe"] -= 20
+    c._on_gcode_response("Probe again")
+    await asyncio.sleep(0.2)
+    check("a flood: events past the limit are skipped", not log,
+          [e["title"] for e in log])
+    c._ev_busy = 0
     cust.append(pn.cfgmod.clean_custom([
         {"name": "last", "evaluate": "object",
          "when": "event.object.number == event.object.count",

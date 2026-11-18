@@ -48,6 +48,7 @@
 from __future__ import annotations
 import asyncio
 import base64
+import collections
 import datetime
 import html
 import http
@@ -65,8 +66,8 @@ import time
 import urllib.parse
 import urllib.request
 from typing import (
-    TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, NamedTuple, Optional, Sequence, Set,
-    Tuple
+    TYPE_CHECKING, Any, Awaitable, Callable, Deque, Dict, List, NamedTuple, Optional,
+    Sequence, Set, Tuple
 )
 
 import apprise
@@ -301,6 +302,9 @@ CUSTOM_GAP = 60.
 # Evaluated at an event (layer change, tool change...): sent each time it's
 # true then, but not again within CUSTOM_EVENT_GAP seconds
 CUSTOM_EVENT_GAP = 10.
+# Events being evaluated at once, at most (a macro printing hundreds of
+# console lines): the rest are skipped
+CUSTOM_EVENT_PENDING = 20
 MACRO_SEP = " || "
 MACRO_LEVELS = ("min", "low", "default", "high", "max")
 # (runout_exception_id: printers.py)
@@ -1082,6 +1086,11 @@ class PushNotifications:
         self._ev_pct = 0
         self._ev_tool = ""
         self._ev_excluded: Set[str] = set()
+        # pushraker's own console lines, and how many events are being
+        # evaluated (a flood of console lines isn't rendered one each)
+        self._own_lines: Deque[str] = collections.deque(maxlen=50)
+        self._ev_busy = 0
+        self._ev_dropped = False
         # pushraker.*: what each notification sent since pushraker started
         # (by its row: at, count, job, job_count, failed, failed_count),
         # the last one sent, and when pushraker started
@@ -1474,6 +1483,8 @@ class PushNotifications:
         name = cfgmod.backup_name(s, now.strftime("%Y-%m-%d"))
         if how == "download":
             return {"name": name, "backup": data}
+        if how == "restore":
+            return await self._restore_view(args.get("backup"))
         if how not in ("push", "email"):
             raise self.server.error("Invalid request", 400)
         targets = cfgmod.backup_targets(s)
@@ -1522,6 +1533,39 @@ class PushNotifications:
             raise self.server.error(f"Not sent to {what}"
                                     + (f" ({why})" if why else ""), 502)
         return {"name": name, "sent": what}
+
+    async def _restore_view(self, backup: Any) -> Dict[str, Any]:
+        """A backup file's settings for the page to load (and save with
+        Save & Apply): validated like a save, so nothing in a file gets
+        onto the page unchecked; the tokens and passwords stay the ones
+        stored here. A backup that needs a token this printer doesn't
+        have (none, or one for another service) loads all the same,
+        switched off for the check: saving asks for the token."""
+        try:
+            settings = cfgmod.backup_settings(backup)
+            data = {k: v for k, v in settings.items()
+                    if k not in cfgmod.SECRET_FIELDS
+                    + ("secret_for", "email_password_for", "meta")
+                    and not k.startswith("has_")}
+            off = dict(data, enabled=False)
+            bare = dict(self.settings, secret_for="", email_password_for="",
+                        **{k: "" for k in cfgmod.SECRET_FIELDS})
+            s = None
+            for d, cur in ((data, self.settings), (off, self.settings),
+                           (off, bare)):
+                try:
+                    s = cfgmod.validate(d, cur, self.env)
+                    break
+                except cfgmod.ConfigError:
+                    if cur is bare:
+                        raise
+            assert s is not None
+            s["enabled"] = bool(data.get("enabled", s["enabled"]))
+        except cfgmod.ConfigError as e:
+            raise self.server.error(f"Can't restore this backup: {e}", 400)
+        out = cfgmod.public_view(s, self.env, self._busy(), __version__)
+        out["meta"]["sending"] = (await self._view())["meta"]["sending"]
+        return {"view": out}
 
     async def _ep_test(self, web_request: Any) -> Dict[str, Any]:
         """Send a test notification with the settings the page holds (not
@@ -2717,7 +2761,11 @@ class PushNotifications:
             leaf("pushraker.last", "the last notification sent",
                  "Its name, and the same as any notification's: "
                  ".fired.time, .fired.ago, .failed…",
-                 [leaf("pushraker.last.fired.ago", "seconds since")]),
+                 [leaf("pushraker.last.name"),
+                  leaf("pushraker.last.fired", "yes / no", "", [
+                      leaf("pushraker.last.fired.time", "🕐 when"),
+                      leaf("pushraker.last.fired.ago", "seconds since")]),
+                  leaf("pushraker.last.failed", "yes / no")]),
             leaf("pushraker.failed", "yes / no",
                  "The last notification sent didn't get through.", [
                      leaf("pushraker.failed.count",
@@ -3882,6 +3930,9 @@ class PushNotifications:
     # -- console --
 
     def _console(self, line: str) -> None:
+        # pushraker's own line: not a console message to evaluate custom
+        # notifications at (one sent at every line would answer itself)
+        self._own_lines.append(line)
         try:
             self.server.send_event("server:gcode_response", line)
         except Exception as e:
@@ -4655,7 +4706,9 @@ class PushNotifications:
         message everything in between. On printers without this component
         the line is only console output."""
         for line in str(response or "").splitlines():
-            if line.strip() and not line.startswith(
+            if line in self._own_lines:
+                self._own_lines.remove(line)
+            elif line.strip() and not line.startswith(
                     (CUSTOM_PREFIX, MACRO_PREFIX)):
                 self._custom_fire("console", {"message": line.strip()})
             if line.startswith(CUSTOM_PREFIX):
@@ -4792,7 +4845,8 @@ class PushNotifications:
     def _mark_sent(self, rid: str, at: float, ok: bool) -> None:
         """pushraker.*: a notification was sent (ok: it got through to
         every destination)."""
-        row = "macro" if rid.startswith("macro_") else rid
+        # By its row: progress_25 is Progress, macro_high the G-code one
+        row = cfgmod.OPTION_KEYS.get(rid, rid)
         st = self._sent.setdefault(row, {"count": 0, "failed_count": 0})
         if st.get("job") != self._job_number:
             st["job"], st["job_count"] = self._job_number, 0
@@ -4810,6 +4864,9 @@ class PushNotifications:
         except Exception:
             state = {}
         pos = (state.get("virtual_sdcard") or {}).get("file_position")
+        if self._ps_state() not in ("paused", "printing") or \
+                not self._job_active:
+            return                  # resumed or ended meanwhile
         i = self._file_pause(pos) if self._job_pauses else None
         if i is None:
             self._pause_now = {"planned": False}
@@ -4820,7 +4877,7 @@ class PushNotifications:
                            "kind": p["kind"] or "pause",
                            "message": p["message"] or None}
 
-    def _pushraker_values(self, sample: bool = False) -> Dict[str, Any]:
+    def _pushraker_values(self) -> Dict[str, Any]:
         """pushraker.*: its settings and what each notification sent since
         it started. A dict's "" is the value of the name itself (fired is
         yes/no and has .time and .ago)."""
@@ -4829,9 +4886,6 @@ class PushNotifications:
         rows = s.get("rows") or {}
 
         def stats(row: str) -> Dict[str, Any]:
-            if sample and row == "complete":
-                return {"at": now - 600, "count": 1, "job": self._job_number,
-                        "job_count": 1, "failed": False, "failed_count": 0}
             return self._sent.get(row) or {}
 
         def sent(st: Dict[str, Any], name: str) -> Dict[str, Any]:
@@ -4871,8 +4925,10 @@ class PushNotifications:
                 when={"": c.get("when") or None,
                       "state": self._custom_state.get(c["name"])},
                 evaluate=c.get("evaluate") or "poll")
+        last_st = self._sent.get(self._sent_last or "") or {}
         last = self._sent_last
-        last_st = self._sent.get(last or "") or {}
+        if last and last.startswith("custom_"):
+            last = last[len("custom_"):]
         on = bool(s.get("enabled"))
 
         def safe(f: Callable[[Dict[str, Any]], Any], default: Any) -> Any:
@@ -4895,9 +4951,8 @@ class PushNotifications:
             "email": {"enabled": on and safe(cfgmod.email_configured,
                                              False),
                       "to": safe(cfgmod.recipients, [])},
-            "last": dict({"": last[len("custom_"):]
-                          if last and last.startswith("custom_") else last,
-                          "name": last}, **sent(last_st, "pushraker.last"))
+            "last": dict({"": last, "name": last},
+                         **sent(last_st, "pushraker.last"))
             if last else None,
             "failed": {"": bool(last_st.get("failed")),
                        "count": sum(v.get("failed_count", 0)
@@ -4908,14 +4963,15 @@ class PushNotifications:
             out.setdefault(name, v)
         return out
 
-    def _pushraker_view(self, sample: bool = False) -> jj.View:
-        """pushraker.* for a template: read when the template reads it."""
+    def _pushraker_view(self) -> jj.View:
+        """pushraker.* for a template: read when the template reads it, on
+        Moonraker's event loop (what was sent changes under a render)."""
         values: Optional[Dict[str, Any]] = None
 
         def node(path: List[str]) -> Any:
             nonlocal values
             if values is None:
-                values = self._pushraker_values(sample)
+                values = self._pushraker_values()
             cur: Any = values
             for p in path:
                 if not isinstance(cur, dict) or p == "":
@@ -4933,7 +4989,7 @@ class PushNotifications:
         def items(path: List[str]) -> Optional[list]:
             v = node(path)
             return v if isinstance(v, list) else None
-        return jj.View(look, branch, items, [], "pushraker")
+        return self._live_view(look, branch, items, "pushraker")
 
     def _ps_state(self) -> str:
         return str(self._status["print_stats"].get("state") or "")
@@ -4977,13 +5033,31 @@ class PushNotifications:
                  if c.get("evaluate") == kind
                  and cfgmod.custom_rid(c["name"]) in self.rows
                  and self._custom_stuck.get(c["name"]) != c["when"]]
-        if items:
-            self._spawn(self._custom_event(kind, items, values))
+        if not items:
+            return
+        if self._ev_busy >= CUSTOM_EVENT_PENDING:
+            if not self._ev_dropped:
+                logging.warning("[pushraker] ⚠️ events are coming faster "
+                                "than custom notifications' When can be "
+                                "evaluated; some are skipped")
+            self._ev_dropped = True
+            return
+        self._ev_dropped = False
+        self._ev_busy += 1
+        self._spawn(self._custom_event(kind, items, values))
 
     async def _custom_event(self, kind: str, items: List[Dict[str, Any]],
                             values: Dict[str, Any]) -> None:
         """Evaluate each one's When at this event (empty: always true);
         one that's true, and due, is sent."""
+        try:
+            await self._custom_event_run(kind, items, values)
+        finally:
+            self._ev_busy -= 1
+
+    async def _custom_event_run(self, kind: str,
+                                items: List[Dict[str, Any]],
+                                values: Dict[str, Any]) -> None:
         texts = [cfgmod.when_template(c["when"]) for c in items if c["when"]]
         ctx = await self._template_context(texts) if texts else {}
         for c in items:
