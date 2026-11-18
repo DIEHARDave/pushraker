@@ -697,6 +697,7 @@
         <ul class="bk-list" id="bk-out-list"></ul>
         <label class="bk-secrets" id="bk-secrets-wrap"><input type="checkbox" id="bk-secrets"> Include tokens, passwords and the webhook URL</label>
         <p class="bk-red" id="bk-out-red"></p>
+        <p class="bk-note" id="bk-out-never">Tokens, passwords and the webhook URL are never sent.</p>
         <p class="bk-note">The last saved settings: Save &amp; Apply first to include changes on this page.</p>
         <div class="bk-to" id="bk-to-wrap">
             <label for="bk-to">Send to</label>
@@ -2801,7 +2802,9 @@
         el('bk-out-file').textContent = `📄 pushraker-backup-${(state.name || 'Printer').replace(/[^A-Za-z0-9._-]+/g, '-')}-${day}${on ? '-with-secrets' : ''}.json`;
         el('bk-out-red').textContent = on
             ? '⚠️ This file contains your tokens and passwords. Anyone who has it can send notifications as you and use your email account\'s SMTP login. Keep it somewhere safe.'
-            : '⚠️ Not included: tokens, passwords, webhook URLs. Restoring this backup on another printer, or after a reset, needs them entered again.';
+            : '';
+        el('bk-out-red').style.display = on ? '' : 'none';
+        el('bk-out-never').style.display = bkHow === 'download' ? 'none' : '';
     }
     el('bk-secrets').onchange = bkSecrets;
     el('bk-cancel').onclick = () => el('bk-out').classList.remove('open');
