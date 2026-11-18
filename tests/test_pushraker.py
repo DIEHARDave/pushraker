@@ -1434,6 +1434,27 @@ async def test_file_mode():
                 check(f"backup_settings refuses {bad}", False)
             except pn.cfgmod.ConfigError:
                 pass
+        full = await server.endpoints["/server/pushraker/backup"](
+            WebRequest("POST", {"how": "download", "secrets": True}))
+        check("backup with secrets, when a download asks: apart from the "
+              "settings, and the file's name says so",
+              full["backup"]["secrets"] == {
+                  "secret": "tok123", "email_password": "pw456",
+                  "webhook_url": "https://hook.example.com/abc789"}
+              and "tok123" not in json.dumps(full["backup"]["settings"])
+              and full["name"].endswith("-with-secrets.json"), full["name"])
+        got = await server.endpoints["/server/pushraker/backup"](
+            WebRequest("POST", {"how": "restore", "backup": full["backup"]}))
+        check("restore hands the file's secrets to the page",
+              got["secrets"] == full["backup"]["secrets"]
+              and not any(x in json.dumps(got["view"]) for x in
+                          ("tok123", "pw456", "abc789")), got["secrets"])
+        check("secrets that aren't a line of text are left out",
+              pn.cfgmod.backup_secrets(
+                  {"secrets": {"secret": ["x"], "email_password": "a\nb",
+                               "webhook_url": "  https://h.example  ",
+                               "other": "y"}})
+              == {"webhook_url": "https://h.example"})
         back = await server.endpoints["/server/pushraker/backup"](
             WebRequest("POST", {"how": "restore", "backup": bk["backup"]}))
         check("restore: the backup's settings, checked, for the page; the "
@@ -1456,6 +1477,8 @@ async def test_file_mode():
         sent.clear()
         res = await server.endpoints["/server/pushraker/backup"](
             WebRequest("POST", {"how": "push"}))
+        check("...a restore of one without secrets hands over none",
+              back["secrets"] == {}, back["secrets"])
         check("backup sent by push, as a file",
               res["sent"] == "ntfy" and sent and sent[0][2]
               and sent[0][2].endswith(".json")

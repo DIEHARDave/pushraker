@@ -1519,21 +1519,40 @@ BACKUP_PUSH = {"ntfy": "", "telegram": "", "discord": "", "discord_dm": "",
                "gotify": "Gotify can't send files"}
 
 
-def backup(s: Dict[str, Any], version: str,
-           created: str) -> Dict[str, Any]:
+def backup(s: Dict[str, Any], version: str, created: str,
+           secrets: bool = False) -> Dict[str, Any]:
     """The saved settings as a backup: no tokens, passwords or webhook
-    URL (the secrets), nothing about which service they were for."""
+    URL (the secrets), nothing about which service they were for.
+    secrets (a download the user asked to have them in): those that are
+    set, apart from the settings, under "secrets"."""
     out = json.loads(json.dumps(s))
     for key in SECRET_FIELDS + ("secret_for", "email_password_for"):
         out.pop(key, None)
-    return {"pushraker_backup": BACKUP_FORMAT, "version": version,
+    data = {"pushraker_backup": BACKUP_FORMAT, "version": version,
             "printer": s.get("name") or "Printer", "created": created,
             "settings": out}
+    if secrets:
+        data["secrets"] = {k: str(s[k]) for k in SECRET_FIELDS if s.get(k)}
+    return data
 
 
-def backup_name(s: Dict[str, Any], day: str) -> str:
+def backup_name(s: Dict[str, Any], day: str, secrets: bool = False) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", s.get("name") or "Printer")
-    return f"pushraker-backup-{name.strip('-') or 'Printer'}-{day}.json"
+    return (f"pushraker-backup-{name.strip('-') or 'Printer'}-{day}"
+            + ("-with-secrets" if secrets else "") + ".json")
+
+
+def backup_secrets(data: Any) -> Dict[str, str]:
+    """The tokens and passwords a backup file was saved with (none in
+    most): each a line of text, as if typed into the page."""
+    found = data.get("secrets") if isinstance(data, dict) else None
+    out = {}
+    for key in SECRET_FIELDS:
+        value = found.get(key) if isinstance(found, dict) else None
+        if isinstance(value, str) and value.strip() and \
+                len(value) <= 2000 and "\n" not in value:
+            out[key] = value.strip()
+    return out
 
 
 def backup_targets(s: Dict[str, Any]) -> Dict[str, Any]:

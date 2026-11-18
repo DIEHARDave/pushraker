@@ -1470,17 +1470,21 @@ class PushNotifications:
 
     async def _ep_backup(self, web_request: Any) -> Dict[str, Any]:
         """The saved settings as a backup file (no tokens, passwords or
-        webhook URL): for the page to download, or sent as a file by the
-        push service or by email (to the address the page gives), even
-        with notifications off."""
+        webhook URL, unless a download asks for them): for the page to
+        download, or sent as a file by the push service or by email (to
+        the address the page gives), even with notifications off."""
         assert self.store is not None
         await self._refresh()
         args = web_request.get_args()
         how = str(args.get("how") or "download")
         s = self.settings
         now = datetime.datetime.now(self.tz)
-        data = cfgmod.backup(s, __version__, now.isoformat(timespec="seconds"))
-        name = cfgmod.backup_name(s, now.strftime("%Y-%m-%d"))
+        # Tokens and passwords: only in a download that asks for them,
+        # never in one sent by push or email
+        secrets = how == "download" and args.get("secrets") is True
+        data = cfgmod.backup(s, __version__,
+                             now.isoformat(timespec="seconds"), secrets)
+        name = cfgmod.backup_name(s, now.strftime("%Y-%m-%d"), secrets)
         if how == "download":
             return {"name": name, "backup": data}
         if how == "restore":
@@ -1547,6 +1551,9 @@ class PushNotifications:
                     if k not in cfgmod.SECRET_FIELDS
                     + ("secret_for", "email_password_for", "meta")
                     and not k.startswith("has_")}
+            # Tokens and passwords the file has: as if typed into the page
+            secrets = cfgmod.backup_secrets(backup)
+            data.update(secrets)
             off = dict(data, enabled=False)
             bare = dict(self.settings, secret_for="", email_password_for="",
                         **{k: "" for k in cfgmod.SECRET_FIELDS})
@@ -1565,7 +1572,8 @@ class PushNotifications:
             raise self.server.error(f"Can't restore this backup: {e}", 400)
         out = cfgmod.public_view(s, self.env, self._busy(), __version__)
         out["meta"]["sending"] = (await self._view())["meta"]["sending"]
-        return {"view": out}
+        # The page puts them in its fields: Save & Apply stores them
+        return {"view": out, "secrets": secrets}
 
     async def _ep_test(self, web_request: Any) -> Dict[str, Any]:
         """Send a test notification with the settings the page holds (not

@@ -2795,7 +2795,7 @@
         el('bk-out').classList.add('open');
         if (bkHow === 'email') el('bk-to').focus();
     };
-    // MOCKUP: Include tokens, passwords and the webhook URL (Download only)
+    // Include tokens, passwords and the webhook URL: a download only
     function bkSecrets() {
         const on = bkHow === 'download' && el('bk-secrets').checked;
         const day = new Date().toISOString().slice(0, 10);
@@ -2815,7 +2815,8 @@
         go.textContent = bkHow === 'download' ? 'Downloading…' : 'Sending…';
         try {
             const data = await api('/server/pushraker/backup', 'POST',
-                bkHow === 'email' ? { how: 'email', to: el('bk-to').value.trim() } : { how: bkHow });
+                bkHow === 'email' ? { how: 'email', to: el('bk-to').value.trim() }
+                    : bkHow === 'download' ? { how: bkHow, secrets: el('bk-secrets').checked } : { how: bkHow });
             if (bkHow === 'download') {
                 const url = URL.createObjectURL(new Blob([JSON.stringify(data.backup, null, 2)], { type: 'application/json' }));
                 const a = document.createElement('a');
@@ -2875,6 +2876,14 @@
             // onto the page as it came; the secrets stay the ones here
             const res = await api('/server/pushraker/backup', 'POST', { how: 'restore', backup: data });
             render(res.view);
+            // Tokens and passwords the file has: into their fields, as if
+            // typed (Save & Apply stores them)
+            const sec = res.secrets || {};
+            const box = { ntfy: 'nt-secret', pushover: 'nt-po-token', gotify: 'nt-gt-token', telegram: 'nt-tg-token',
+                discord: 'nt-dc-hook', discord_dm: 'nt-dc-token' }[res.view.provider];
+            if (sec.secret && box) el(box).value = sec.secret;
+            if (sec.email_password) el('nt-email-password').value = sec.email_password;
+            if (sec.webhook_url) el('nt-wh-url').value = sec.webhook_url;
         } catch (e) {
             bkSay('⚠️ ' + (/^Can't restore/.test(e.message) ? e.message : 'Can\'t restore this backup: ' + e.message));
             return;

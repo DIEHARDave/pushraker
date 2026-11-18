@@ -731,15 +731,21 @@ changes on the page.
   address to start with), with the email settings, even with email
   notifications off.
 
-⚠️ Not in a backup: tokens, passwords and the webhook URL (what
+Not in a backup: tokens, passwords and the webhook URL (what
 `pushraker.secrets` holds; a webhook URL usually has a token in it).
-Restoring on another printer, or after a reset, needs them entered again.
+Restoring on another printer, or after a reset, needs them entered again,
+unless you tick **Include tokens, passwords and the webhook URL** when
+downloading: the file is then named `…-with-secrets.json`. ⚠️ Anyone who
+has that file can send notifications as you and use your email account's
+SMTP login; it isn't encrypted. A backup sent by push or email never has
+them.
 A topic on the public ntfy.sh server is in it: anyone with the file can
 read that topic.
 
 **Restore…** loads a backup file onto the page. ⚠️ All settings are
 replaced by the backup's (excluding tokens, passwords and the webhook URL,
-which stay as they are). Nothing is saved until you click Save & Apply.
+which stay as they are, unless the file has them). Nothing is saved until
+you click Save & Apply.
 
 ## Requirements
 
