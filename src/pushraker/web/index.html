@@ -697,7 +697,7 @@
         <ul class="bk-list" id="bk-out-list"></ul>
         <label class="bk-secrets" id="bk-secrets-wrap"><input type="checkbox" id="bk-secrets"> Include tokens, passwords and the webhook URL</label>
         <p class="bk-red" id="bk-out-red"></p>
-        <p class="bk-note" id="bk-out-never">Tokens, passwords and the webhook URL are never sent.</p>
+        <p class="bk-note" id="bk-out-never"></p>
         <p class="bk-note">The last saved settings: Save &amp; Apply first to include changes on this page.</p>
         <div class="bk-to" id="bk-to-wrap">
             <label for="bk-to">Send to</label>
@@ -2805,6 +2805,7 @@
             : '';
         el('bk-out-red').style.display = on ? '' : 'none';
         el('bk-out-never').style.display = bkHow === 'download' ? 'none' : '';
+        el('bk-out-never').textContent = `Tokens, passwords and the webhook URL cannot be sent via ${bkHow === 'email' ? 'email' : 'push'}.`;
     }
     el('bk-secrets').onchange = bkSecrets;
     el('bk-cancel').onclick = () => el('bk-out').classList.remove('open');
@@ -2862,7 +2863,7 @@
             : '⚠️ All settings will be replaced by the backup (excluding tokens, passwords, webhook URLs).';
         el('bk-in-note').textContent = (has
             ? 'This file contains tokens and passwords. '
-            : 'Tokens, passwords and webhook URLs stay as they are here. ') + 'Nothing is saved until you click Save & Apply.';
+            : 'Tokens, passwords and webhook URLs stay as they are. ') + 'Nothing is saved until you click Save & Apply.';
         el('bk-modal').classList.add('open');
     };
     el('bk-no').onclick = () => { el('bk-modal').classList.remove('open'); bkIn = null; };
